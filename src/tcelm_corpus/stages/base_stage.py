@@ -14,6 +14,7 @@ class BaseStage(ABC):
     def __init__(self, stage_name: str, output_dir: str, config: CorpusPipelineConfig):
         self.stage_name = stage_name
         self.config = config
+        self.output_dir = output_dir
         self.stage_dir = os.path.join(output_dir, "stages", stage_name)
         os.makedirs(self.stage_dir, exist_ok=True)
 

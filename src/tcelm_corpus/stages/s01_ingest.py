@@ -49,7 +49,9 @@ class Stage01Ingest(BaseStage):
                 prov_tokens = len(raw_text.split())
 
                 rec = {
-                    "doc_id": doc_id,
+                    "document_id": doc_id,
+                    "parent_document_id": doc_id,
+                    "source_record_id": doc_id,
                     "source": source_name,
                     "priority": priority,
                     "provisional_tokens": prov_tokens,
@@ -64,16 +66,15 @@ class Stage01Ingest(BaseStage):
                 source_token_count += prov_tokens
 
                 if len(records_batch) >= 5000:
-                    shards = self.shard_io.write_records_to_shards(records_batch, shard_prefix=f"{source_cfg.category}")
+                    shards = self.shard_io.write_records_to_shards(records_batch, shard_prefix="part")
                     all_shards.extend(shards)
                     records_batch = []
 
-                # Limit streaming if running micro smoke test
                 if getattr(self.config, "max_records_per_source", None) and source_doc_count >= self.config.max_records_per_source:
                     break
 
             if records_batch:
-                shards = self.shard_io.write_records_to_shards(records_batch, shard_prefix=f"{source_cfg.category}")
+                shards = self.shard_io.write_records_to_shards(records_batch, shard_prefix="part")
                 all_shards.extend(shards)
 
             record_counts[source_name] = source_doc_count

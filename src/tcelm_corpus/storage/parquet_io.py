@@ -17,7 +17,7 @@ class ParquetShardIO:
         self,
         records: Iterator[Dict[str, Any]],
         schema: Optional[pa.Schema] = None,
-        shard_prefix: str = "shard"
+        shard_prefix: str = "part"
     ) -> List[str]:
         written_shards = []
         batch = []
@@ -51,12 +51,18 @@ class ParquetShardIO:
         pq.write_table(table, shard_path, compression="SNAPPY")
         return shard_path
 
-    def read_shards(self, shard_prefix: str = "shard") -> Iterator[Dict[str, Any]]:
-        shard_files = sorted(glob.glob(os.path.join(self.stage_dir, f"{shard_prefix}_*.parquet")))
+    def read_shards(self, shard_prefix: Optional[str] = None) -> Iterator[Dict[str, Any]]:
+        if shard_prefix is None or shard_prefix == "*":
+            shard_files = sorted(glob.glob(os.path.join(self.stage_dir, "*.parquet")))
+        else:
+            shard_files = sorted(glob.glob(os.path.join(self.stage_dir, f"{shard_prefix}_*.parquet")))
+
         for shard_file in shard_files:
             table = pq.read_table(shard_file)
             for row in table.to_pylist():
                 yield row
 
-    def list_shards(self, shard_prefix: str = "shard") -> List[str]:
+    def list_shards(self, shard_prefix: Optional[str] = None) -> List[str]:
+        if shard_prefix is None or shard_prefix == "*":
+            return sorted(glob.glob(os.path.join(self.stage_dir, "*.parquet")))
         return sorted(glob.glob(os.path.join(self.stage_dir, f"{shard_prefix}_*.parquet")))

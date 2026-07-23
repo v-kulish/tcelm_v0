@@ -55,6 +55,14 @@ class Stage05Dedup(BaseStage):
 
     def run_stage(self) -> Dict[str, Any]:
         all_recs = list(self.input_io.read_shards())
+        if not all_recs:
+            raise RuntimeError("Stage '05_dedup' received 0 input records from Stage 04.")
+
+        # Ensure document_id is present
+        for rec in all_recs:
+            if "document_id" not in rec and "doc_id" in rec:
+                rec["document_id"] = rec["doc_id"]
+
         initial_count = len(all_recs)
 
         # 1. Exact Document Deduplication
@@ -115,8 +123,9 @@ class Stage05Dedup(BaseStage):
         doc_ngrams = {}
 
         for idx, rec in enumerate(para_deduped):
+            doc_id = rec["document_id"]
             ngrams = get_20grams(rec["normalized_text"])
-            doc_ngrams[rec["document_id"]] = ngrams
+            doc_ngrams[doc_id] = ngrams
             if not ngrams:
                 continue
 
@@ -124,7 +133,7 @@ class Stage05Dedup(BaseStage):
             for band_idx in range(num_bands):
                 band_sig = tuple(sig[band_idx * rows_per_band : (band_idx + 1) * rows_per_band])
                 bucket_key = (band_idx, band_sig)
-                lsh_buckets[bucket_key].append(rec["document_id"])
+                lsh_buckets[bucket_key].append(doc_id)
 
         # Candidate pair generation
         candidate_pairs = set()
@@ -159,7 +168,7 @@ class Stage05Dedup(BaseStage):
                     doc_dict[id2]["dedup_cluster_id"] = doc_dict[id2]["document_id"]
 
         final_retained = [rec for rec in para_deduped if rec["document_id"] not in rejected_ids]
-        written_shards = self.shard_io.write_records_to_shards(final_retained, shard_prefix="dedup")
+        written_shards = self.shard_io.write_records_to_shards(final_retained, shard_prefix="part")
 
         record_counts = {}
         token_counts = {}

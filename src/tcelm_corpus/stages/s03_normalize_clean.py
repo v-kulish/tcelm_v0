@@ -30,9 +30,13 @@ class Stage03NormalizeClean(BaseStage):
         token_counts = {}
 
         source_cfg_map = {s.name: s for s in self.config.sources}
+        all_input = list(self.input_io.read_shards())
+        if not all_input:
+            raise RuntimeError("Stage '03_normalize_clean' received 0 input records from Stage 02.")
 
-        for rec in self.input_io.read_shards():
+        for rec in all_input:
             source_name = rec["source"]
+            source_name_lower = source_name.lower()
             source_cfg = source_cfg_map.get(source_name)
             
             # 1. Normalization & PII Redaction
@@ -60,23 +64,37 @@ class Stage03NormalizeClean(BaseStage):
 
             cleaned_text = clean_res.cleaned_text
 
-            # 3. Source-Specific Cleaners
-            if "cccc" in source_name:
+            # 3. Case-Insensitive Source Cleaner Dispatch
+            if "cccc" in source_name_lower:
                 sp_res = self.cccc_cleaner.clean(cleaned_text, rec.get("url", ""))
-            elif "wikimedia" in source_name:
+            elif "wikimedia" in source_name_lower:
                 sp_res = self.wiki_cleaner.clean(cleaned_text, rec.get("title", ""))
-            elif "gutenberg" in source_name:
+            elif "stackexchange" in source_name_lower:
+                sp_res = clean_res
+            elif "gutenberg" in source_name_lower:
                 sp_res = self.books_cleaner.clean_gutenberg(cleaned_text)
-            elif "pre_1929" in source_name:
+            elif "pre_1929" in source_name_lower:
                 sp_res = self.books_cleaner.clean_pre1929(cleaned_text)
-            elif "arxiv" in source_name:
+            elif "doab" in source_name_lower or "pressbooks" in source_name_lower:
+                sp_res = self.books_cleaner.clean_doab_or_pressbooks(cleaned_text)
+            elif "arxiv" in source_name_lower:
                 sp_res = self.sci_cleaner.clean_arxiv(cleaned_text)
-            elif "pes2o" in source_name:
+            elif "pes2o" in source_name_lower:
                 sp_res = self.sci_cleaner.clean_pes2o(cleaned_text)
-            elif "libretexts" in source_name:
+            elif "pubmed" in source_name_lower:
+                sp_res = self.sci_cleaner.clean_pubmed(cleaned_text)
+            elif "libretexts" in source_name_lower:
                 sp_res = self.edu_cleaner.clean_libretexts(cleaned_text)
-            elif "pep" in source_name:
+            elif "oercommons" in source_name_lower:
+                sp_res = self.edu_cleaner.clean_oercommons(cleaned_text)
+            elif "hansard" in source_name_lower:
+                sp_res = clean_res
+            elif "usgpo" in source_name_lower or "regulations" in source_name_lower or "caselaw" in source_name_lower:
+                sp_res = self.gov_cleaner.clean_usgpo_regulations_caselaw(cleaned_text, source_type=source_name_lower)
+            elif "pep" in source_name_lower or "python_enhancement" in source_name_lower:
                 sp_res = self.tech_cleaner.clean_pep(cleaned_text)
+            elif "github" in source_name_lower:
+                sp_res = clean_res
             else:
                 sp_res = clean_res
 
@@ -85,7 +103,8 @@ class Stage03NormalizeClean(BaseStage):
                 continue
 
             rec_out = {
-                "doc_id": rec["doc_id"],
+                "document_id": rec["document_id"],
+                "parent_document_id": rec.get("parent_document_id", rec["document_id"]),
                 "source": source_name,
                 "priority": rec["priority"],
                 "normalized_text": sp_res.cleaned_text,
@@ -103,7 +122,7 @@ class Stage03NormalizeClean(BaseStage):
             record_counts[source_name] = record_counts.get(source_name, 0) + 1
             token_counts[source_name] = token_counts.get(source_name, 0) + rec_out["approx_tokens"]
 
-        written_shards = self.shard_io.write_records_to_shards(cleaned_records, shard_prefix="clean")
+        written_shards = self.shard_io.write_records_to_shards(cleaned_records, shard_prefix="part")
 
         return {
             "record_counts": record_counts,

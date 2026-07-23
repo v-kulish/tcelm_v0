@@ -16,7 +16,11 @@ class Stage04Segment(BaseStage):
         record_counts = {}
         token_counts = {}
 
-        for rec in self.input_io.read_shards():
+        all_input = list(self.input_io.read_shards())
+        if not all_input:
+            raise RuntimeError("Stage '04_segment' received 0 input records from Stage 03.")
+
+        for rec in all_input:
             quality = QualityScores(
                 language_probability=1.0,
                 printable_character_ratio=rec.get("printable_ratio", 1.0),
@@ -35,9 +39,12 @@ class Stage04Segment(BaseStage):
                 "domain": rec.get("domain", "general")
             }
 
+            doc_id = rec.get("document_id") or rec.get("doc_id", "doc")
+            parent_id = rec.get("parent_document_id") or doc_id
+
             cdocs = self.segmenter.segment_document(
-                doc_id=rec["doc_id"],
-                parent_doc_id=rec["doc_id"],
+                doc_id=doc_id,
+                parent_doc_id=parent_id,
                 source=rec["source"],
                 normalized_text=rec["normalized_text"],
                 metadata=metadata,
@@ -63,7 +70,7 @@ class Stage04Segment(BaseStage):
                 record_counts[src] = record_counts.get(src, 0) + 1
                 token_counts[src] = token_counts.get(src, 0) + len(cdoc.normalized_text.split())
 
-        written_shards = self.shard_io.write_records_to_shards(segmented_records, shard_prefix="seg")
+        written_shards = self.shard_io.write_records_to_shards(segmented_records, shard_prefix="part")
 
         return {
             "record_counts": record_counts,

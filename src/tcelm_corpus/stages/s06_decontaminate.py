@@ -1,4 +1,5 @@
 import re
+import json
 from typing import Dict, Any, List, Set, Tuple
 from collections import defaultdict
 from .base_stage import BaseStage
@@ -13,7 +14,6 @@ class Stage06Decontaminate(BaseStage):
         self._init_benchmark_registry()
 
     def _init_benchmark_registry(self):
-        # Default benchmark items (GSM8K, HumanEval, MMLU samples)
         standard_benchmarks = [
             ("gsm8k", "gsm8k_0", "Janet has 16 apples. She gives 4 apples to her friend and keeps the rest."),
             ("humaneval", "he_0", "def has_close_elements(numbers: List[float], threshold: float) -> bool:"),
@@ -31,13 +31,20 @@ class Stage06Decontaminate(BaseStage):
                     self.shingle_index[sh].append(b_entry)
 
     def run_stage(self) -> Dict[str, Any]:
+        all_input = list(self.input_io.read_shards())
+        if not all_input:
+            raise RuntimeError("Stage '06_decontaminate' received 0 input records from Stage 05.")
+
         retained_records = []
         contamination_logs = []
         contaminated_parents = set()
 
         shingle_size = getattr(self.config.decontamination, "shingle_size", 13)
 
-        for rec in self.input_io.read_shards():
+        for rec in all_input:
+            doc_id = rec.get("document_id") or rec.get("doc_id")
+            parent_id = rec.get("parent_document_id") or doc_id
+
             text_clean = rec["normalized_text"].lower()
             words = re.findall(r'\w+', text_clean)
             if not words:
@@ -50,11 +57,11 @@ class Stage06Decontaminate(BaseStage):
             for b_item in self.benchmark_items:
                 if b_item["text"] in text_clean:
                     is_contaminated = True
-                    contaminated_parents.add(rec["parent_document_id"])
+                    contaminated_parents.add(parent_id)
                     contamination_logs.append({
                         "benchmark_name": b_item["b_name"],
                         "item_id": b_item["item_id"],
-                        "matched_document_id": rec["document_id"],
+                        "matched_document_id": doc_id,
                         "match_type": "exact_question_match",
                         "action": "removed_parent_family"
                     })
@@ -65,11 +72,11 @@ class Stage06Decontaminate(BaseStage):
                     overlap_ratio = len(shared) / max(len(b_item["shingles"]), 1)
                     if overlap_ratio >= getattr(self.config.decontamination, "min_token_overlap_ratio", 0.70):
                         is_contaminated = True
-                        contaminated_parents.add(rec["parent_document_id"])
+                        contaminated_parents.add(parent_id)
                         contamination_logs.append({
                             "benchmark_name": b_item["b_name"],
                             "item_id": b_item["item_id"],
-                            "matched_document_id": rec["document_id"],
+                            "matched_document_id": doc_id,
                             "match_type": f"shingle_overlap_{overlap_ratio:.2f}",
                             "action": "removed_parent_family"
                         })
@@ -78,13 +85,11 @@ class Stage06Decontaminate(BaseStage):
             if not is_contaminated:
                 retained_records.append(rec)
 
-        clean_records = [rec for rec in retained_records if rec["parent_document_id"] not in contaminated_parents]
-        written_shards = self.shard_io.write_records_to_shards(clean_records, shard_prefix="decontam")
+        clean_records = [rec for rec in retained_records if (rec.get("parent_document_id") or rec.get("document_id")) not in contaminated_parents]
+        written_shards = self.shard_io.write_records_to_shards(clean_records, shard_prefix="part")
 
-        # Save contamination log json
         log_file = f"{self.stage_dir}/contamination_logs.json"
         with open(log_file, "w", encoding="utf-8") as f:
-            import json
             json.dump(contamination_logs, f, indent=2)
 
         record_counts = {}

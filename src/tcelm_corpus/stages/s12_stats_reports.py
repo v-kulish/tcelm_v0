@@ -11,24 +11,34 @@ class Stage12StatsReports(BaseStage):
     def __init__(self, output_dir: str, config):
         super().__init__("12_stats_reports", output_dir, config)
         self.output_dir = output_dir
-        self.layer_a_io = ParquetShardIO(f"{output_dir}/stages/07_split")
-        self.layer_b_io = ParquetShardIO(f"{output_dir}/stages/09_tokenize_select")
+        stage_09_dir = os.path.join(output_dir, "stages", "09_tokenize_select")
+        self.layer_a_io = ParquetShardIO(os.path.join(stage_09_dir, "layer_a_selected"))
+        self.layer_b_io = ParquetShardIO(os.path.join(stage_09_dir, "layer_b_selected"))
         self.decontam_io = ParquetShardIO(f"{output_dir}/stages/06_decontaminate")
         self.stats_calc = TokenFrequencyStats(vocab_size=self.config.tokenizer.vocab_size)
         self.report_gen = MandatoryReportGenerator(os.path.join(output_dir, "reports"))
 
     def run_stage(self) -> Dict[str, Any]:
+        all_a = list(self.layer_a_io.read_shards())
+        all_b = list(self.layer_b_io.read_shards())
+
+        if not all_a or not all_b:
+            raise RuntimeError("Stage '12_stats_reports' received 0 selected Layer A or Layer B records from Stage 09.")
+
         canonical_docs: List[CanonicalDocument] = []
-        for rec in self.layer_a_io.read_shards():
+        for rec in all_a:
+            doc_id = rec.get("document_id") or rec.get("doc_id")
+            parent_id = rec.get("parent_document_id") or doc_id
+
             struct_dict = json.loads(rec["structure_json"]) if isinstance(rec.get("structure_json"), str) else rec.get("structure_json", {})
             spans = StructureSpans(**struct_dict) if isinstance(struct_dict, dict) else StructureSpans()
 
             cdoc = CanonicalDocument(
-                document_id=rec["doc_id"],
-                parent_document_id=rec.get("parent_document_id", rec["doc_id"]),
+                document_id=doc_id,
+                parent_document_id=parent_id,
                 source=rec["source"],
                 source_revision=rec.get("source_revision", "v0.1"),
-                source_record_id=rec.get("source_record_id", rec["doc_id"]),
+                source_record_id=rec.get("source_record_id", doc_id),
                 source_url_or_provenance=rec.get("url", ""),
                 license=rec.get("license_status", "missing"),
                 authors=rec.get("authors", ""),
@@ -37,7 +47,7 @@ class Stage12StatsReports(BaseStage):
                 language="en",
                 raw_text_hash=rec.get("raw_text_hash", ""),
                 normalized_text_hash=rec.get("normalized_text_hash", ""),
-                dedup_cluster_id=rec.get("dedup_cluster_id", rec["doc_id"]),
+                dedup_cluster_id=rec.get("dedup_cluster_id", doc_id),
                 normalized_text=rec["normalized_text"],
                 document_type="article",
                 domain=rec.get("domain", "web"),
@@ -49,11 +59,14 @@ class Stage12StatsReports(BaseStage):
             canonical_docs.append(cdoc)
 
         tokenized_docs: List[TokenizedDocument] = []
-        for rec in self.layer_b_io.read_shards():
+        for rec in all_b:
+            doc_id = rec.get("document_id") or rec.get("doc_id")
+            parent_id = rec.get("parent_document_id") or doc_id
+
             tok_ids = json.loads(rec["token_ids_json"])
             tdoc = TokenizedDocument(
-                document_id=rec["document_id"],
-                parent_document_id=rec["parent_document_id"],
+                document_id=doc_id,
+                parent_document_id=parent_id,
                 source=rec["source"],
                 split=rec["split"],
                 token_ids=tok_ids

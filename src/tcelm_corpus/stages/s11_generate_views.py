@@ -1,3 +1,4 @@
+import os
 import json
 from typing import Dict, Any, List
 from .base_stage import BaseStage
@@ -8,21 +9,29 @@ from ..schema import TokenizedDocument
 class Stage11GenerateViews(BaseStage):
     def __init__(self, output_dir: str, config):
         super().__init__("11_generate_views", output_dir, config)
-        self.input_io = ParquetShardIO(f"{output_dir}/stages/09_tokenize_select")
+        stage_09_b_dir = os.path.join(output_dir, "stages", "09_tokenize_select", "layer_b_selected")
+        self.input_io = ParquetShardIO(stage_09_b_dir)
         self.view_generator = DerivedViewGenerator(seed=self.config.seed)
 
     def run_stage(self) -> Dict[str, Any]:
+        all_input = list(self.input_io.read_shards())
+        if not all_input:
+            raise RuntimeError("Stage '11_generate_views' received 0 input records from Stage 09 Layer B.")
+
         tokenized_docs = []
-        for rec in self.input_io.read_shards():
+        for rec in all_input:
+            doc_id = rec.get("document_id") or rec.get("doc_id")
+            parent_id = rec.get("parent_document_id") or doc_id
+
             tok_ids = json.loads(rec["token_ids_json"])
-            para_spans = json.loads(rec["paragraph_spans_json"])
-            sent_spans = json.loads(rec["sentence_spans_json"])
-            turn_spans = json.loads(rec["turn_spans_json"])
-            eq_spans = json.loads(rec["equation_spans_json"])
+            para_spans = json.loads(rec.get("paragraph_spans_json", "[]"))
+            sent_spans = json.loads(rec.get("sentence_spans_json", "[]"))
+            turn_spans = json.loads(rec.get("turn_spans_json", "[]"))
+            eq_spans = json.loads(rec.get("equation_spans_json", "[]"))
 
             tdoc = TokenizedDocument(
-                document_id=rec["document_id"],
-                parent_document_id=rec["parent_document_id"],
+                document_id=doc_id,
+                parent_document_id=parent_id,
                 source=rec["source"],
                 split=rec["split"],
                 token_ids=tok_ids,
@@ -42,7 +51,6 @@ class Stage11GenerateViews(BaseStage):
         print("Generating Layer C Bridge Masked Span views...")
         bridge_views = self.view_generator.generate_bridge_views(tokenized_docs)
 
-        # Convert view objects to dict for Parquet serialization
         view_records = []
         for v in causal_views + prefix_suffix_views + bridge_views:
             rec = {
@@ -58,7 +66,7 @@ class Stage11GenerateViews(BaseStage):
             }
             view_records.append(rec)
 
-        written_shards = self.shard_io.write_records_to_shards(view_records, shard_prefix="view")
+        written_shards = self.shard_io.write_records_to_shards(view_records, shard_prefix="part")
 
         return {
             "record_counts": {

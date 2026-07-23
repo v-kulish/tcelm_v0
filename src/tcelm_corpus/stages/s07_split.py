@@ -9,6 +9,10 @@ class Stage07Split(BaseStage):
         self.input_io = ParquetShardIO(f"{output_dir}/stages/06_decontaminate")
 
     def run_stage(self) -> Dict[str, Any]:
+        all_input = list(self.input_io.read_shards())
+        if not all_input:
+            raise RuntimeError("Stage '07_split' received 0 input records from Stage 06.")
+
         split_records = []
         record_counts = {}
         token_counts = {}
@@ -18,8 +22,9 @@ class Stage07Split(BaseStage):
         test_share = getattr(self.config.splits, "test", 0.0010)
         holdout_share = getattr(self.config.splits, "trajectory_holdout", 0.0010)
 
-        for rec in self.input_io.read_shards():
-            cluster_id = rec.get("dedup_cluster_id") or rec.get("parent_document_id") or rec["doc_id"]
+        for rec in all_input:
+            doc_id = rec.get("document_id") or rec.get("doc_id")
+            cluster_id = rec.get("dedup_cluster_id") or rec.get("parent_document_id") or doc_id
             hash_str = f"{cluster_id}:{self.config.seed}"
             score = int(hashlib.md5(hash_str.encode('utf-8')).hexdigest()[:8], 16) / 0xFFFFFFFF
 
@@ -33,6 +38,7 @@ class Stage07Split(BaseStage):
                 split = "train"
 
             rec["split"] = split
+            rec["document_id"] = doc_id
             split_records.append(rec)
 
             src = rec["source"]
@@ -41,7 +47,7 @@ class Stage07Split(BaseStage):
             token_counts[src] = token_counts.get(src, 0) + toks
             split_counts[split] = split_counts.get(split, 0) + toks
 
-        written_shards = self.shard_io.write_records_to_shards(split_records, shard_prefix="split")
+        written_shards = self.shard_io.write_records_to_shards(split_records, shard_prefix="part")
 
         return {
             "record_counts": record_counts,

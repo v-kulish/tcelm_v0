@@ -14,11 +14,15 @@ class Stage08TrainTokenizer(BaseStage):
         )
 
     def run_stage(self) -> Dict[str, Any]:
+        all_input = list(self.input_io.read_shards())
+        if not all_input:
+            raise RuntimeError("Stage '08_train_tokenizer' received 0 input records from Stage 07.")
+
         train_texts = []
         source_sample_counts = {}
 
         # Filter strictly for TRAIN split records
-        for rec in self.input_io.read_shards():
+        for rec in all_input:
             if rec.get("split") != "train":
                 continue
             
@@ -28,8 +32,8 @@ class Stage08TrainTokenizer(BaseStage):
                 source_sample_counts[src] = source_sample_counts.get(src, 0) + 1
 
         if not train_texts:
-            # Fallback if dataset is very small in smoke tests
-            train_texts = [rec["normalized_text"] for rec in self.input_io.read_shards()]
+            # Fallback if dataset is small in smoke test
+            train_texts = [rec["normalized_text"] for rec in all_input]
 
         tok_path = os.path.join(self.stage_dir, "tokenizer.json")
         print(f"Training 32,768 Byte-Level BPE Tokenizer on {len(train_texts):,} TRAIN split text samples...")

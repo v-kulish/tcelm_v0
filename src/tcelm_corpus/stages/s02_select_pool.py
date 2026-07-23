@@ -11,9 +11,12 @@ class Stage02SelectPool(BaseStage):
     def run_stage(self) -> Dict[str, Any]:
         source_records = defaultdict(list)
         
-        # Read all ingested candidates from stage 01
+        # Read all ingested candidates from stage 01 regardless of prefix
         for row in self.input_io.read_shards():
             source_records[row["source"]].append(row)
+
+        if not source_records:
+            raise RuntimeError("Stage '02_select_pool' received 0 input records from Stage 01.")
 
         retained_records = []
         record_counts = {}
@@ -43,7 +46,7 @@ class Stage02SelectPool(BaseStage):
             token_counts[source_name] = accumulated_tokens
             print(f"Source `{source_name}` retained pool: {accumulated_docs:,} docs, {accumulated_tokens:,} tokens (Target: {retained_target_tokens:,}).")
 
-        written_shards = self.shard_io.write_records_to_shards(retained_records, shard_prefix="pool")
+        written_shards = self.shard_io.write_records_to_shards(retained_records, shard_prefix="part")
 
         return {
             "record_counts": record_counts,
