@@ -53,7 +53,11 @@ class Stage12StatsReports(BaseStage):
                 domain=rec.get("domain", "web"),
                 genre="prose",
                 structure=spans,
-                quality=QualityScores(),
+                quality=QualityScores(
+                    printable_character_ratio=rec.get("printable_ratio", 1.0),
+                    alphabetic_character_ratio=rec.get("alphabetic_ratio", 1.0),
+                    pii_count=rec.get("pii_count", 0)
+                ),
                 split=rec.get("split", "train")
             )
             canonical_docs.append(cdoc)
@@ -84,21 +88,26 @@ class Stage12StatsReports(BaseStage):
             with open(decontam_manifest, "r", encoding="utf-8") as f:
                 contamination_logs = json.load(f)
 
-        # 3. Read stage 05 dedup stats
-        dedup_manifest = os.path.join(self.output_dir, "stages", "05_dedup", "manifest.json")
-        dedup_stats = {}
-        if os.path.exists(dedup_manifest):
-            with open(dedup_manifest, "r", encoding="utf-8") as f:
-                d_data = json.load(f)
-                dedup_stats = d_data.get("rejection_counts", {})
+        # 3. Read stage manifests for rejection counts
+        s03_manifest = os.path.join(self.output_dir, "stages", "03_normalize_clean", "manifest.json")
+        s03_rejections = {}
+        if os.path.exists(s03_manifest):
+            with open(s03_manifest, "r", encoding="utf-8") as f:
+                s03_rejections = json.load(f).get("rejection_counts", {})
+
+        s05_manifest = os.path.join(self.output_dir, "stages", "05_dedup", "manifest.json")
+        s05_stats = {}
+        if os.path.exists(s05_manifest):
+            with open(s05_manifest, "r", encoding="utf-8") as f:
+                s05_stats = json.load(f).get("rejection_counts", {})
 
         # 4. Generate 7 Mandatory Pre-training Audit Reports
         report_files = self.report_gen.generate_all_reports(
             canonical_docs,
             tokenized_docs,
-            rejection_counts={"quality_rejections": 0},
+            rejection_counts=s03_rejections,
             contamination_logs=contamination_logs,
-            dedup_stats=dedup_stats
+            dedup_stats=s05_stats
         )
 
         return {

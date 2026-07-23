@@ -8,6 +8,22 @@ from ..storage.parquet_io import ParquetShardIO
 from ..schema import CanonicalDocument, StructureSpans, QualityScores, SegmentPosition
 from ..segmentation import StructuralSegmenter
 
+class UnionFind:
+    def __init__(self, elements):
+        self.parent = {e: e for e in elements}
+
+    def find(self, i):
+        if self.parent[i] == i:
+            return i
+        self.parent[i] = self.find(self.parent[i])
+        return self.parent[i]
+
+    def union(self, i, j):
+        root_i = self.find(i)
+        root_j = self.find(j)
+        if root_i != root_j:
+            self.parent[root_i] = root_j
+
 SOURCE_QUALITY_RANKS = {
     "books": 0.95,
     "scientific": 0.90,
@@ -58,12 +74,9 @@ class Stage05Dedup(BaseStage):
         if not all_recs:
             raise RuntimeError("Stage '05_dedup' received 0 input records from Stage 04.")
 
-        # Ensure document_id is present
         for rec in all_recs:
             if "document_id" not in rec and "doc_id" in rec:
                 rec["document_id"] = rec["doc_id"]
-
-        initial_count = len(all_recs)
 
         # 1. Exact Document Deduplication
         exact_map = defaultdict(list)
@@ -112,20 +125,21 @@ class Stage05Dedup(BaseStage):
                 rec["structure_json"] = json.dumps(new_spans.__dict__)
                 para_deduped.append(rec)
 
-        # 3. LSH MinHash Fuzzy Deduplication
+        # 3. LSH MinHash Fuzzy Deduplication using Union-Find Clustering
         num_bands = getattr(self.config.deduplication, "num_bands", 16)
         rows_per_band = getattr(self.config.deduplication, "rows_per_band", 8)
         num_perm = num_bands * rows_per_band
         final_jaccard = getattr(self.config.deduplication, "final_jaccard", 0.90)
 
-        # Generate MinHash & LSH Bands
         lsh_buckets = defaultdict(list)
         doc_ngrams = {}
+        doc_ids = [rec["document_id"] for rec in para_deduped]
+        doc_dict = {rec["document_id"]: rec for rec in para_deduped}
 
-        for idx, rec in enumerate(para_deduped):
-            doc_id = rec["document_id"]
+        for rec in para_deduped:
+            d_id = rec["document_id"]
             ngrams = get_20grams(rec["normalized_text"])
-            doc_ngrams[doc_id] = ngrams
+            doc_ngrams[d_id] = ngrams
             if not ngrams:
                 continue
 
@@ -133,41 +147,45 @@ class Stage05Dedup(BaseStage):
             for band_idx in range(num_bands):
                 band_sig = tuple(sig[band_idx * rows_per_band : (band_idx + 1) * rows_per_band])
                 bucket_key = (band_idx, band_sig)
-                lsh_buckets[bucket_key].append(doc_id)
+                lsh_buckets[bucket_key].append(d_id)
 
         # Candidate pair generation
         candidate_pairs = set()
-        for bucket, doc_ids in lsh_buckets.items():
-            if len(doc_ids) > 1:
-                for i in range(len(doc_ids)):
-                    for j in range(i + 1, len(doc_ids)):
-                        candidate_pairs.add(tuple(sorted([doc_ids[i], doc_ids[j]])))
+        for bucket, b_doc_ids in lsh_buckets.items():
+            if len(b_doc_ids) > 1:
+                for i in range(len(b_doc_ids)):
+                    for j in range(i + 1, len(b_doc_ids)):
+                        candidate_pairs.add(tuple(sorted([b_doc_ids[i], b_doc_ids[j]])))
 
-        # Compare Candidate Pairs
-        rejected_ids = set()
-        doc_dict = {rec["document_id"]: rec for rec in para_deduped}
-        fuzzy_clusters = 0
-
+        uf = UnionFind(doc_ids)
         for id1, id2 in candidate_pairs:
-            if id1 in rejected_ids or id2 in rejected_ids:
-                continue
-            
             sim = jaccard_sim(doc_ngrams[id1], doc_ngrams[id2])
             if sim >= final_jaccard:
+                uf.union(id1, id2)
+
+        # Group components and pick 1 deterministic winner per component
+        components = defaultdict(list)
+        for d_id in doc_ids:
+            root = uf.find(d_id)
+            components[root].append(doc_dict[d_id])
+
+        final_retained = []
+        rejected_count = 0
+        fuzzy_clusters = 0
+
+        for root, cluster_recs in components.items():
+            if len(cluster_recs) == 1:
+                rec = cluster_recs[0]
+                rec["dedup_cluster_id"] = rec["document_id"]
+                final_retained.append(rec)
+            else:
                 fuzzy_clusters += 1
-                q1 = compute_quality_score(doc_dict[id1])
-                q2 = compute_quality_score(doc_dict[id2])
+                winner = max(cluster_recs, key=lambda r: (compute_quality_score(r), r["priority"]))
+                for rec in cluster_recs:
+                    rec["dedup_cluster_id"] = winner["document_id"]
+                final_retained.append(winner)
+                rejected_count += (len(cluster_recs) - 1)
 
-                if q1 >= q2:
-                    rejected_ids.add(id2)
-                    doc_dict[id1]["dedup_cluster_id"] = doc_dict[id1]["document_id"]
-                    doc_dict[id2]["dedup_cluster_id"] = doc_dict[id1]["document_id"]
-                else:
-                    rejected_ids.add(id1)
-                    doc_dict[id1]["dedup_cluster_id"] = doc_dict[id2]["document_id"]
-                    doc_dict[id2]["dedup_cluster_id"] = doc_dict[id2]["document_id"]
-
-        final_retained = [rec for rec in para_deduped if rec["document_id"] not in rejected_ids]
         written_shards = self.shard_io.write_records_to_shards(final_retained, shard_prefix="part")
 
         record_counts = {}
@@ -180,7 +198,8 @@ class Stage05Dedup(BaseStage):
         rejection_counts = {
             "exact_duplicates_removed": exact_removed_count,
             "frequent_paragraphs_stripped": len(frequent_paras),
-            "fuzzy_duplicates_removed": len(rejected_ids)
+            "fuzzy_duplicate_clusters": fuzzy_clusters,
+            "fuzzy_duplicates_removed": rejected_count
         }
 
         return {

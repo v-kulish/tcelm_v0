@@ -39,19 +39,23 @@ class Stage01Ingest(BaseStage):
 
             # Stream candidates
             for i, raw_item in enumerate(ds):
-                doc_id = str(raw_item.get("id", raw_item.get("doc_id", f"{source_name}_{i}")))
+                raw_id = str(raw_item.get("id", raw_item.get("doc_id", f"{source_name}_{i}")))
+                # Globally unique, deterministic document ID
+                document_id = hashlib.sha256(f"{source_name}:{raw_id}".encode("utf-8")).hexdigest()[:32]
+                parent_document_id = document_id
+
                 raw_text, license_status, metadata = adapter.extract_record(raw_item)
                 
                 if not raw_text or not raw_text.strip():
                     continue
 
-                priority = compute_priority(self.config.corpus_version, source_name, doc_id, self.config.seed)
+                priority = compute_priority(self.config.corpus_version, source_name, raw_id, self.config.seed)
                 prov_tokens = len(raw_text.split())
 
                 rec = {
-                    "document_id": doc_id,
-                    "parent_document_id": doc_id,
-                    "source_record_id": doc_id,
+                    "document_id": document_id,
+                    "parent_document_id": parent_document_id,
+                    "source_record_id": raw_id,
                     "source": source_name,
                     "priority": priority,
                     "provisional_tokens": prov_tokens,

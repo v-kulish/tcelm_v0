@@ -60,6 +60,9 @@ class Stage11GenerateViews(BaseStage):
                 "horizon": v.horizon,
                 "relation": v.relation,
                 "sampling_seed": v.sampling_seed,
+                "input_token_ids_json": json.dumps(v.input_token_ids),
+                "target_token_ids_json": json.dumps(v.target_token_ids),
+                "loss_mask_json": json.dumps(getattr(v, "loss_mask", [1] * len(v.target_token_ids))),
                 "input_token_count": len(v.input_token_ids),
                 "target_token_count": len(v.target_token_ids),
                 "metadata_json": json.dumps(v.metadata)

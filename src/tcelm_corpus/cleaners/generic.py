@@ -11,9 +11,6 @@ class CleaningResult:
     metrics: Dict[str, float]
 
 class GenericCleaner:
-    def __init__(self):
-        self.printable_chars = set(string.printable)
-
     def clean(
         self,
         text: str,
@@ -37,22 +34,28 @@ class GenericCleaner:
         if num_tokens < min_doc_length:
             return CleaningResult(text, True, f"below_min_length_{num_tokens}<{min_doc_length}", {})
 
-        # Character Quality Ratios
+        # Unicode Printable Character Check
         char_count = len(text)
-        printable_count = sum(1 for c in text if c in self.printable_chars)
+        printable_count = sum(1 for c in text if c.isprintable() or c in ['\n', '\r', '\t'])
         printable_ratio = printable_count / max(char_count, 1)
 
         alpha_count = sum(1 for c in text if c.isalpha())
         alphabetic_ratio = alpha_count / max(char_count, 1)
 
+        # English Character/Word Heuristic Ratio (English probability baseline)
+        eng_ascii_words = sum(1 for w in word_tokens if all(c.isascii() and (c.isalpha() or c in string.punctuation) for c in w))
+        english_prob = eng_ascii_words / max(num_tokens, 1)
+
         # Thresholds by source category
         is_technical_or_scientific = source_category in ["scientific", "technical", "government_legal"]
-        min_alphabetic = 0.25 if is_technical_or_scientific else 0.45
+        min_alphabetic = 0.25 if is_technical_or_scientific else 0.40
 
         if printable_ratio < 0.98:
             return CleaningResult(text, True, f"low_printable_ratio_{printable_ratio:.3f}<0.98", {})
         if alphabetic_ratio < min_alphabetic:
             return CleaningResult(text, True, f"low_alphabetic_ratio_{alphabetic_ratio:.3f}<{min_alphabetic}", {})
+        if english_prob < min_english_prob:
+            return CleaningResult(text, True, f"low_english_probability_{english_prob:.3f}<{min_english_prob}", {})
 
         # Line Repetition Check
         unique_lines = set(lines)
@@ -64,7 +67,7 @@ class GenericCleaner:
         if unique_line_ratio < 0.60:
             return CleaningResult(text, True, f"low_unique_line_ratio_{unique_line_ratio:.3f}<0.60", {})
 
-        # Median apparent word length check (excluding URLs and equations)
+        # Median apparent word length check (excluding URLs and XML markers)
         non_url_words = [w for w in word_tokens if not w.startswith('http') and not w.startswith('<')]
         if non_url_words:
             lengths = sorted([len(w) for w in non_url_words])
@@ -84,6 +87,7 @@ class GenericCleaner:
         metrics = {
             "printable_ratio": printable_ratio,
             "alphabetic_ratio": alphabetic_ratio,
+            "english_probability": english_prob,
             "unique_line_ratio": unique_line_ratio,
             "approx_tokens": float(num_tokens)
         }

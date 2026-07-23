@@ -1,11 +1,13 @@
 import os
 import json
+import hashlib
 from typing import Dict, Any, List
 from collections import defaultdict
 from .base_stage import BaseStage
 from ..storage.parquet_io import ParquetShardIO
 from ..tokenizer import BPECorpusTokenizer
 from ..schema import CanonicalDocument, StructureSpans
+from ..segmentation import StructuralSegmenter
 
 def trim_spans(spans: List[List[int]], max_len: int) -> List[List[int]]:
     result = []
@@ -25,6 +27,7 @@ class Stage09TokenizeSelect(BaseStage):
             vocab_size=self.config.tokenizer.vocab_size,
             special_tokens=self.config.tokenizer.special_tokens
         )
+        self.segmenter = StructuralSegmenter()
 
     def run_stage(self) -> Dict[str, Any]:
         tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
@@ -93,29 +96,44 @@ class Stage09TokenizeSelect(BaseStage):
                 tok_len = len(tdoc.token_ids)
 
                 # Post-tokenization quota enforcement check
-                if accumulated_tokens + tok_len > target_quota and accumulated_tokens > 0:
+                if accumulated_tokens + tok_len > target_quota:
                     needed = target_quota - accumulated_tokens
-                    if needed > 64:
-                        cut_idx = tok_len
-                        if tdoc.paragraph_token_spans:
-                            for p_start, p_end in tdoc.paragraph_token_spans:
-                                if p_end <= needed:
-                                    cut_idx = p_end
-                        if cut_idx == tok_len and tdoc.sentence_token_spans:
-                            for s_start, s_end in tdoc.sentence_token_spans:
-                                if s_end <= needed:
-                                    cut_idx = s_end
-                        if cut_idx == tok_len:
-                            cut_idx = needed
+                    if needed <= 0:
+                        break
 
-                        tdoc.token_ids = tdoc.token_ids[:cut_idx]
-                        tok_len = cut_idx
+                    cut_idx = tok_len
+                    if tdoc.paragraph_token_spans:
+                        for p_start, p_end in tdoc.paragraph_token_spans:
+                            if p_end <= needed:
+                                cut_idx = p_end
+                    if cut_idx == tok_len and tdoc.sentence_token_spans:
+                        for s_start, s_end in tdoc.sentence_token_spans:
+                            if s_end <= needed:
+                                cut_idx = s_end
+                    if cut_idx == tok_len:
+                        cut_idx = needed
 
-                        # Recompute / trim all spans
-                        tdoc.sentence_token_spans = trim_spans(tdoc.sentence_token_spans, cut_idx)
-                        tdoc.paragraph_token_spans = trim_spans(tdoc.paragraph_token_spans, cut_idx)
-                        tdoc.turn_token_spans = trim_spans(tdoc.turn_token_spans, cut_idx)
-                        tdoc.equation_token_spans = trim_spans(tdoc.equation_token_spans, cut_idx)
+                    if cut_idx < 64 and accumulated_tokens > 0:
+                        # Omit segment if less than minimum length
+                        break
+
+                    tdoc.token_ids = tdoc.token_ids[:cut_idx]
+                    tok_len = cut_idx
+
+                    # Recompute / trim all spans
+                    tdoc.sentence_token_spans = trim_spans(tdoc.sentence_token_spans, cut_idx)
+                    tdoc.paragraph_token_spans = trim_spans(tdoc.paragraph_token_spans, cut_idx)
+                    tdoc.turn_token_spans = trim_spans(tdoc.turn_token_spans, cut_idx)
+                    tdoc.equation_token_spans = trim_spans(tdoc.equation_token_spans, cut_idx)
+
+                    # Truncate matching Layer A canonical text consistently
+                    truncated_text = self.tokenizer.tokenizer.decode(tdoc.token_ids)
+                    cdoc.normalized_text = truncated_text
+                    cdoc.normalized_text_hash = hashlib.sha256(truncated_text.encode("utf-8")).hexdigest()
+                    cdoc.structure = self.segmenter.extract_structure_spans(truncated_text)
+                    rec["normalized_text"] = truncated_text
+                    rec["normalized_text_hash"] = cdoc.normalized_text_hash
+                    rec["structure_json"] = json.dumps(cdoc.structure.__dict__)
 
                 rec_b = {
                     "document_id": tdoc.document_id,
