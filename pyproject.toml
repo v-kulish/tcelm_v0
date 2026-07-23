@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tcelm_corpus"
+version = "0.1.0"
+description = "TCELM-Corpus-v0 Data Processing Pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "datasets>=2.16.0",
+    "pyarrow>=14.0.0",
+    "tokenizers>=0.15.0",
+    "pydantic>=2.0.0",
+    "regex>=2023.10.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "xxhash>=3.4.0",
+    "tqdm>=4.66.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

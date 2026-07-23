@@ -1,0 +1,238 @@
+{
+  "corpus_version": "TCELM-Corpus-v0",
+  "seed": 42,
+  "oversampling_multiplier": 1.35,
+  "default_target_scale_tokens": 3000000000,
+  "sources": [
+    {
+      "name": "common-pile/cccc_filtered",
+      "category": "web",
+      "share": 0.3000,
+      "quota_3b_tokens": 900000000,
+      "max_domain_share_of_quota": 0.0025,
+      "max_domain_share_of_corpus": 0.00075,
+      "min_english_prob": 0.85,
+      "min_doc_length": 256,
+      "max_doc_length": 32768
+    },
+    {
+      "name": "common-pile/wikimedia_filtered",
+      "category": "wikimedia",
+      "share": 0.1500,
+      "quota_3b_tokens": 450000000,
+      "min_english_prob": 0.80,
+      "min_doc_length": 128,
+      "max_doc_length": 32768,
+      "subproject_shares": {
+        "wikipedia": 0.72,
+        "wikibooks": 0.15,
+        "wikiversity": 0.07,
+        "wikivoyage": 0.04,
+        "wikinews": 0.02
+      }
+    },
+    {
+      "name": "common-pile/stackexchange_filtered",
+      "category": "discussion",
+      "share": 0.1000,
+      "quota_3b_tokens": 300000000,
+      "min_english_prob": 0.85,
+      "min_doc_length": 128,
+      "max_doc_length": 12288,
+      "max_answers": 20,
+      "max_comments": 40,
+      "max_site_share_of_quota": 0.10
+    },
+    {
+      "name": "common-pile/doab_filtered",
+      "category": "books",
+      "share": 0.0700,
+      "quota_3b_tokens": 210000000,
+      "min_english_prob": 0.75,
+      "min_doc_length": 1024,
+      "max_doc_length": 32768
+    },
+    {
+      "name": "common-pile/project_gutenberg_filtered",
+      "category": "books",
+      "share": 0.0400,
+      "quota_3b_tokens": 120000000,
+      "min_english_prob": 0.75,
+      "min_doc_length": 1024,
+      "max_doc_length": 32768
+    },
+    {
+      "name": "common-pile/pre_1929_books_filtered",
+      "category": "books",
+      "share": 0.0300,
+      "quota_3b_tokens": 90000000,
+      "min_english_prob": 0.60,
+      "min_doc_length": 1024,
+      "max_doc_length": 32768,
+      "min_unigram_log_likelihood": -20.0,
+      "max_ufffd_ratio": 0.001
+    },
+    {
+      "name": "common-pile/pressbooks_filtered",
+      "category": "books",
+      "share": 0.0220,
+      "quota_3b_tokens": 66000000,
+      "min_english_prob": 0.75,
+      "min_doc_length": 512,
+      "max_doc_length": 32768
+    },
+    {
+      "name": "common-pile/arxiv_papers_filtered",
+      "category": "scientific",
+      "share": 0.0600,
+      "quota_3b_tokens": 180000000,
+      "min_english_prob": 0.65,
+      "min_doc_length": 512,
+      "max_doc_length": 32768
+    },
+    {
+      "name": "common-pile/peS2o_filtered",
+      "category": "scientific",
+      "share": 0.0700,
+      "quota_3b_tokens": 210000000,
+      "min_english_prob": 0.65,
+      "min_doc_length": 512,
+      "max_doc_length": 32768,
+      "field_shares": {
+        "cs_engineering": 0.22,
+        "physics_math": 0.20,
+        "medicine_bio": 0.25,
+        "earth_environment": 0.12,
+        "social_sci_econ": 0.12,
+        "chemistry_agriculture": 0.07,
+        "humanities_arts": 0.02
+      }
+    },
+    {
+      "name": "common-pile/pubmed_filtered",
+      "category": "scientific",
+      "share": 0.0400,
+      "quota_3b_tokens": 120000000,
+      "min_english_prob": 0.65,
+      "min_doc_length": 256,
+      "max_doc_length": 32768
+    },
+    {
+      "name": "common-pile/libretexts_filtered",
+      "category": "educational",
+      "share": 0.0160,
+      "quota_3b_tokens": 48000000,
+      "min_english_prob": 0.75,
+      "min_doc_length": 512,
+      "max_doc_length": 32768
+    },
+    {
+      "name": "common-pile/oercommons_filtered",
+      "category": "educational",
+      "share": 0.0020,
+      "quota_3b_tokens": 6000000,
+      "min_english_prob": 0.75,
+      "min_doc_length": 256,
+      "max_doc_length": 32768
+    },
+    {
+      "name": "common-pile/uk_hansard_filtered",
+      "category": "government_legal",
+      "share": 0.0200,
+      "quota_3b_tokens": 60000000,
+      "min_doc_length": 256,
+      "max_doc_length": 32768
+    },
+    {
+      "name": "common-pile/usgpo_filtered",
+      "category": "government_legal",
+      "share": 0.0100,
+      "quota_3b_tokens": 30000000,
+      "min_doc_length": 256,
+      "max_doc_length": 32768
+    },
+    {
+      "name": "common-pile/regulations_filtered",
+      "category": "government_legal",
+      "share": 0.0100,
+      "quota_3b_tokens": 30000000,
+      "min_doc_length": 256,
+      "max_doc_length": 32768
+    },
+    {
+      "name": "common-pile/caselaw_access_project_filtered",
+      "category": "government_legal",
+      "share": 0.0100,
+      "quota_3b_tokens": 30000000,
+      "min_doc_length": 256,
+      "max_doc_length": 32768
+    },
+    {
+      "name": "common-pile/github_archive_filtered",
+      "category": "technical",
+      "share": 0.0495,
+      "quota_3b_tokens": 148500000,
+      "min_english_prob": 0.85,
+      "min_doc_length": 96,
+      "max_doc_length": 12288,
+      "max_code_log_token_ratio": 0.60
+    },
+    {
+      "name": "common-pile/python_enhancement_proposals_filtered",
+      "category": "technical",
+      "share": 0.0005,
+      "quota_3b_tokens": 1500000,
+      "min_doc_length": 256,
+      "max_doc_length": 32768
+    }
+  ],
+  "deduplication": {
+    "minhash_num_perm": 128,
+    "ngram_size": 20,
+    "candidate_jaccard": 0.85,
+    "final_jaccard": 0.90,
+    "exact_paragraph_min_tokens": 50,
+    "exact_paragraph_max_occurrences": 10
+  },
+  "decontamination": {
+    "shingle_size": 13,
+    "min_token_overlap_ratio": 0.70
+  },
+  "splits": {
+    "train": 0.9970,
+    "val": 0.0010,
+    "test": 0.0010,
+    "trajectory_holdout": 0.0010,
+    "holdout_composition": {
+      "books": 0.30,
+      "scientific": 0.25,
+      "wikimedia": 0.15,
+      "discussion": 0.10,
+      "government_legal": 0.10,
+      "other": 0.10
+    }
+  },
+  "tokenizer": {
+    "vocab_size": 32768,
+    "max_token_length_bytes": 32,
+    "special_tokens": [
+      "<BOS>",
+      "<EOS>",
+      "<DOC>",
+      "<SECTION>",
+      "<PARAGRAPH>",
+      "<TURN>",
+      "<QUESTION>",
+      "<ANSWER>",
+      "<COMMENT>",
+      "<EQUATION>",
+      "<CODE>",
+      "<MASK_SPAN>",
+      "<EMAIL>",
+      "<PHONE>",
+      "<IP>",
+      "<API_KEY>",
+      "<PRIVATE_KEY>"
+    ]
+  }
+}
