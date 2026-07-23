@@ -39,7 +39,7 @@ class Stage10Freeze(BaseStage):
         if docs_a != docs_b:
             raise RuntimeError(f"Layer A and Layer B document ID mismatch in Stage 10 Freeze: Layer A has {len(docs_a)} docs, Layer B has {len(docs_b)} docs.")
 
-        # Re-encoding verification gate: Layer A text must re-encode to exact Layer B token IDs
+        # Re-encoding verification gate: Layer A text must re-encode to exact Layer B token IDs with zero mismatch
         if self.tokenizer.tokenizer is not None:
             for ra, rb in zip(recs_a, recs_b):
                 text_a = ra["normalized_text"]
@@ -47,9 +47,14 @@ class Stage10Freeze(BaseStage):
                 encoded_ids_a = self.tokenizer.tokenizer.encode(text_a).ids
 
                 if encoded_ids_a != stored_ids_b:
-                    # In micro truncation tests or fallback, assert length compatibility
-                    if len(encoded_ids_a) != len(stored_ids_b):
-                        raise RuntimeError(f"Freeze Gate Failure: Token re-encoding mismatch for doc `{ra['document_id']}` (Encoded Layer A: {len(encoded_ids_a)} tokens vs Layer B: {len(stored_ids_b)} tokens).")
+                    mismatch_idx = next(
+                        (i for i, (a, b) in enumerate(zip(encoded_ids_a, stored_ids_b)) if a != b),
+                        min(len(encoded_ids_a), len(stored_ids_b))
+                    )
+                    raise RuntimeError(
+                        f"Freeze Gate Failure: Token ID sequence mismatch for doc `{ra['document_id']}` at index {mismatch_idx} "
+                        f"(Encoded Layer A length={len(encoded_ids_a)} vs Stored Layer B length={len(stored_ids_b)})."
+                    )
 
         checksums = {
             "layer_a_shards": {},

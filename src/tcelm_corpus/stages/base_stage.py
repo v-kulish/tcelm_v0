@@ -1,6 +1,7 @@
 import os
 import glob
 import shutil
+import json
 import hashlib
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
@@ -26,7 +27,9 @@ class BaseStage(ABC):
 
     def is_completed(self) -> bool:
         man_data = self.manifest.load()
-        return man_data is not None and man_data.get("status") == "SUCCESS"
+        if not man_data or man_data.get("status") != "SUCCESS":
+            return False
+        return man_data.get("config_hash") == self._compute_config_hash()
 
     def purge_stage_outputs(self):
         """
@@ -47,10 +50,10 @@ class BaseStage(ABC):
 
     def execute(self, force: bool = False) -> Dict[str, Any]:
         if not force and self.is_completed():
-            print(f"Stage `{self.stage_name}` already completed. Skipping.")
+            print(f"Stage `{self.stage_name}` already completed with matching config hash. Skipping.")
             return self.manifest.load() or {}
 
-        if force:
+        if force or not self.is_completed():
             self.purge_stage_outputs()
 
         print(f"=== Executing Stage: {self.stage_name} ===")
@@ -69,8 +72,8 @@ class BaseStage(ABC):
         return results
 
     def _compute_config_hash(self) -> str:
-        s = f"{self.config.corpus_version}:{self.config.seed}:{self.config.target_scale_tokens}"
-        return hashlib.sha256(s.encode("utf-8")).hexdigest()
+        canonical_json = json.dumps(self.config.to_dict(), sort_keys=True)
+        return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
     @abstractmethod
     def run_stage(self) -> Dict[str, Any]:

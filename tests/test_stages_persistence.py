@@ -63,3 +63,18 @@ def test_force_restart_purges_previous_shards_and_subdirectories(tmp_path):
     stage09.purge_stage_outputs()
 
     assert not os.path.exists(os.path.join(layer_a_dir, "stale_part_00000.parquet"))
+
+def test_config_change_invalidates_stage_completed(tmp_path):
+    output_dir = str(tmp_path)
+    config1 = CorpusPipelineConfig(seed=42, target_scale_tokens=1000)
+
+    stage1 = DummyStage(output_dir, config1)
+    stage1.execute(force=False)
+    assert stage1.is_completed()
+
+    # Create stage with altered configuration parameter (e.g. final_jaccard=0.85 or seed=99)
+    config2 = CorpusPipelineConfig(seed=99, target_scale_tokens=1000)
+    stage2 = DummyStage(output_dir, config2)
+    
+    # is_completed MUST return False due to config_hash mismatch!
+    assert not stage2.is_completed()

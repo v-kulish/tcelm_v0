@@ -25,7 +25,8 @@ class UnionFind:
         root_i = self.find(i)
         root_j = self.find(j)
         if root_i != root_j:
-            self.parent[root_i] = root_j
+            smaller, larger = sorted((root_i, root_j))
+            self.parent[larger] = smaller
 
 SOURCE_QUALITY_RANKS = {
     "books": 0.95,
@@ -172,7 +173,7 @@ class Stage05Dedup(BaseStage):
                         candidate_pairs.add(tuple(sorted([b_doc_ids[i], b_doc_ids[j]])))
 
         segment_uf = UnionFind(doc_ids)
-        for id1, id2 in candidate_pairs:
+        for id1, id2 in sorted(candidate_pairs):
             sim = jaccard_sim(doc_ngrams[id1], doc_ngrams[id2])
             if sim >= final_jaccard:
                 segment_uf.union(id1, id2)
@@ -181,7 +182,7 @@ class Stage05Dedup(BaseStage):
 
         # Group segment components and pick 1 deterministic winner per segment cluster
         components = defaultdict(list)
-        for d_id in doc_ids:
+        for d_id in sorted(doc_ids):
             root = segment_uf.find(d_id)
             components[root].append(doc_dict[d_id])
 
@@ -189,7 +190,8 @@ class Stage05Dedup(BaseStage):
         rejected_count = 0
         fuzzy_clusters = 0
 
-        for root, cluster_recs in components.items():
+        for root in sorted(components.keys()):
+            cluster_recs = components[root]
             if len(cluster_recs) == 1:
                 rec = cluster_recs[0]
                 rec["dedup_cluster_id"] = rec["document_id"]

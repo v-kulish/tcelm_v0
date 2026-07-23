@@ -1,7 +1,7 @@
 import pytest
 from src.tcelm_corpus.dedup import Deduplicator
 from src.tcelm_corpus.schema import CanonicalDocument, QualityScores, SegmentPosition
-from src.tcelm_corpus.stages.s05_dedup import Stage05Dedup, winner_key
+from src.tcelm_corpus.stages.s05_dedup import Stage05Dedup, UnionFind, winner_key
 from src.tcelm_corpus.config import CorpusPipelineConfig
 from src.tcelm_corpus.storage.parquet_io import ParquetShardIO
 
@@ -64,6 +64,17 @@ def test_winner_key_tie_breaking():
     recs = [rec1, rec2]
     winner = min(recs, key=winner_key)
     assert winner["document_id"] == "doc2"
+
+def test_union_find_canonical_root_determinism():
+    uf1 = UnionFind(["ParentA", "ParentB"])
+    uf1.union("ParentA", "ParentB")
+
+    uf2 = UnionFind(["ParentA", "ParentB"])
+    uf2.union("ParentB", "ParentA") # Reversed call order
+
+    # Both orderings MUST produce the EXACT SAME canonical root ("ParentA")
+    assert uf1.find("ParentA") == uf2.find("ParentA") == "ParentA"
+    assert uf1.find("ParentB") == uf2.find("ParentB") == "ParentA"
 
 def test_parent_family_graph_union_stage05(tmp_path):
     stage_dir = str(tmp_path / "stage_05_test")

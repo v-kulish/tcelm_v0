@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -67,6 +67,9 @@ class CorpusPipelineConfig:
     decontamination: DecontamConfig = field(default_factory=DecontamConfig)
     splits: SplitsConfig = field(default_factory=SplitsConfig)
     tokenizer: TokenizerConfig = field(default_factory=TokenizerConfig)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
     def get_source_quota(self, source_name: str) -> int:
         for s in self.sources:
