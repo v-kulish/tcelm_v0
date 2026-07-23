@@ -17,6 +17,7 @@ def trim_spans(spans: List[List[int]], max_len: int) -> List[List[int]]:
 class Stage09TokenizeSelect(BaseStage):
     def __init__(self, output_dir: str, config):
         super().__init__("09_tokenize_select", output_dir, config)
+        self.output_dir = output_dir
         self.input_io = ParquetShardIO(f"{output_dir}/stages/07_split")
         self.layer_a_out_io = ParquetShardIO(f"{self.stage_dir}/layer_a_selected")
         self.layer_b_out_io = ParquetShardIO(f"{self.stage_dir}/layer_b_selected")
@@ -24,11 +25,14 @@ class Stage09TokenizeSelect(BaseStage):
             vocab_size=self.config.tokenizer.vocab_size,
             special_tokens=self.config.tokenizer.special_tokens
         )
-        tok_path = os.path.join(output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
-        if os.path.exists(tok_path):
-            self.tokenizer.load_tokenizer(tok_path)
 
     def run_stage(self) -> Dict[str, Any]:
+        tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
+        if os.path.exists(tok_path):
+            self.tokenizer.load_tokenizer(tok_path)
+        else:
+            raise RuntimeError(f"Tokenizer file not found at `{tok_path}` in Stage 09 TokenizeSelect.")
+
         all_input = list(self.input_io.read_shards())
         if not all_input:
             raise RuntimeError("Stage '09_tokenize_select' received 0 input records from Stage 07.")
