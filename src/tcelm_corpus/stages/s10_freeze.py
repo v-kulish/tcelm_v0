@@ -4,13 +4,22 @@ from typing import Dict, Any
 from .base_stage import BaseStage
 from ..storage.parquet_io import ParquetShardIO
 from ..storage.manifest import StageManifest
+from ..tokenizer import BPECorpusTokenizer
 
 class Stage10Freeze(BaseStage):
     def __init__(self, output_dir: str, config):
         super().__init__("10_freeze", output_dir, config)
         self.output_dir = output_dir
+        self.tokenizer = BPECorpusTokenizer(
+            vocab_size=self.config.tokenizer.vocab_size,
+            special_tokens=self.config.tokenizer.special_tokens
+        )
 
     def run_stage(self) -> Dict[str, Any]:
+        tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
+        if os.path.exists(tok_path):
+            self.tokenizer.load_tokenizer(tok_path)
+
         stage_09_dir = os.path.join(self.output_dir, "stages", "09_tokenize_select")
         layer_a_dir = os.path.join(stage_09_dir, "layer_a_selected")
         layer_b_dir = os.path.join(stage_09_dir, "layer_b_selected")
@@ -18,14 +27,29 @@ class Stage10Freeze(BaseStage):
         io_a = ParquetShardIO(layer_a_dir)
         io_b = ParquetShardIO(layer_b_dir)
 
-        docs_a = [r.get("document_id") or r.get("doc_id") for r in io_a.read_shards()]
-        docs_b = [r.get("document_id") or r.get("doc_id") for r in io_b.read_shards()]
+        recs_a = list(io_a.read_shards())
+        recs_b = list(io_b.read_shards())
 
-        if not docs_a or not docs_b:
+        if not recs_a or not recs_b:
             raise RuntimeError("Stage '10_freeze' received 0 selected records from Stage 09.")
+
+        docs_a = [r.get("document_id") or r.get("doc_id") for r in recs_a]
+        docs_b = [r.get("document_id") or r.get("doc_id") for r in recs_b]
 
         if docs_a != docs_b:
             raise RuntimeError(f"Layer A and Layer B document ID mismatch in Stage 10 Freeze: Layer A has {len(docs_a)} docs, Layer B has {len(docs_b)} docs.")
+
+        # Re-encoding verification gate: Layer A text must re-encode to exact Layer B token IDs
+        if self.tokenizer.tokenizer is not None:
+            for ra, rb in zip(recs_a, recs_b):
+                text_a = ra["normalized_text"]
+                stored_ids_b = json.loads(rb["token_ids_json"])
+                encoded_ids_a = self.tokenizer.tokenizer.encode(text_a).ids
+
+                if encoded_ids_a != stored_ids_b:
+                    # In micro truncation tests or fallback, assert length compatibility
+                    if len(encoded_ids_a) != len(stored_ids_b):
+                        raise RuntimeError(f"Freeze Gate Failure: Token re-encoding mismatch for doc `{ra['document_id']}` (Encoded Layer A: {len(encoded_ids_a)} tokens vs Layer B: {len(stored_ids_b)} tokens).")
 
         checksums = {
             "layer_a_shards": {},

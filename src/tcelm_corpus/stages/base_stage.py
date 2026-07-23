@@ -1,5 +1,6 @@
 import os
 import glob
+import shutil
 import hashlib
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
@@ -29,27 +30,20 @@ class BaseStage(ABC):
 
     def purge_stage_outputs(self):
         """
-        Removes existing parquet shards, manifests, and checkpoints for transactional forced reruns.
+        Completely removes self.stage_dir including nested output subdirectories (e.g. layer_a_selected,
+        layer_b_selected) for clean transactional forced reruns.
         """
-        for f in glob.glob(os.path.join(self.stage_dir, "*.parquet")):
+        if os.path.exists(self.stage_dir):
             try:
-                os.remove(f)
-            except OSError:
-                pass
-        
-        manifest_path = os.path.join(self.stage_dir, "manifest.json")
-        if os.path.exists(manifest_path):
-            try:
-                os.remove(manifest_path)
+                shutil.rmtree(self.stage_dir)
             except OSError:
                 pass
 
-        chk_path = os.path.join(self.stage_dir, "completed_shards.json")
-        if os.path.exists(chk_path):
-            try:
-                os.remove(chk_path)
-            except OSError:
-                pass
+        os.makedirs(self.stage_dir, exist_ok=True)
+
+        self.shard_io = ParquetShardIO(self.stage_dir)
+        self.manifest = StageManifest(self.stage_dir)
+        self.checkpoint = StageCheckpointManager(self.stage_dir)
 
     def execute(self, force: bool = False) -> Dict[str, Any]:
         if not force and self.is_completed():

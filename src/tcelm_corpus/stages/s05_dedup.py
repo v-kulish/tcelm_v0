@@ -13,6 +13,9 @@ class UnionFind:
         self.parent = {e: e for e in elements}
 
     def find(self, i):
+        if i not in self.parent:
+            self.parent[i] = i
+            return i
         if self.parent[i] == i:
             return i
         self.parent[i] = self.find(self.parent[i])
@@ -40,6 +43,9 @@ def compute_quality_score(rec: Dict[str, Any]) -> float:
     q_source = SOURCE_QUALITY_RANKS.get(category, 0.50)
     q_struct = 1.0 if rec.get("structure_json") else 0.50
     return (0.35 * q_source) + (0.25 * q_struct) + 0.40
+
+def winner_key(r: Dict[str, Any]) -> Tuple[float, int, str]:
+    return (-compute_quality_score(r), r.get("priority", 0), r.get("document_id", ""))
 
 def get_20grams(text: str) -> Set[str]:
     words = re.findall(r'\w+', text.lower())
@@ -80,6 +86,9 @@ class Stage05Dedup(BaseStage):
             if not rec.get("split_group_id"):
                 rec["split_group_id"] = rec.get("parent_document_id") or rec["document_id"]
 
+        all_split_groups = {rec["split_group_id"] for rec in all_recs}
+        parent_uf = UnionFind(all_split_groups)
+
         # 1. Exact Document Deduplication
         exact_map = defaultdict(list)
         for rec in all_recs:
@@ -93,9 +102,12 @@ class Stage05Dedup(BaseStage):
             if len(recs) == 1:
                 exact_deduped.append(recs[0])
             else:
-                winner = max(recs, key=compute_quality_score)
+                winner = min(recs, key=winner_key)
                 exact_deduped.append(winner)
                 exact_removed_count += (len(recs) - 1)
+                # Union parent split groups for exact duplicate items
+                for r in recs:
+                    parent_uf.union(winner["split_group_id"], r["split_group_id"])
 
         # 2. Exact Paragraph Deduplication & Span Recomputation
         para_counts = defaultdict(int)
@@ -159,16 +171,18 @@ class Stage05Dedup(BaseStage):
                     for j in range(i + 1, len(b_doc_ids)):
                         candidate_pairs.add(tuple(sorted([b_doc_ids[i], b_doc_ids[j]])))
 
-        uf = UnionFind(doc_ids)
+        segment_uf = UnionFind(doc_ids)
         for id1, id2 in candidate_pairs:
             sim = jaccard_sim(doc_ngrams[id1], doc_ngrams[id2])
             if sim >= final_jaccard:
-                uf.union(id1, id2)
+                segment_uf.union(id1, id2)
+                # Union parent split groups whenever segments are fuzzy duplicates
+                parent_uf.union(doc_dict[id1]["split_group_id"], doc_dict[id2]["split_group_id"])
 
-        # Group components and pick 1 deterministic winner per component
+        # Group segment components and pick 1 deterministic winner per segment cluster
         components = defaultdict(list)
         for d_id in doc_ids:
-            root = uf.find(d_id)
+            root = segment_uf.find(d_id)
             components[root].append(doc_dict[d_id])
 
         final_retained = []
@@ -179,19 +193,18 @@ class Stage05Dedup(BaseStage):
             if len(cluster_recs) == 1:
                 rec = cluster_recs[0]
                 rec["dedup_cluster_id"] = rec["document_id"]
-                # DO NOT overwrite split_group_id with segment document_id!
-                if not rec.get("split_group_id"):
-                    rec["split_group_id"] = rec.get("parent_document_id", rec["document_id"])
                 final_retained.append(rec)
             else:
                 fuzzy_clusters += 1
-                winner = max(cluster_recs, key=lambda r: (compute_quality_score(r), r["priority"]))
-                winner_split_group = winner.get("split_group_id") or winner.get("parent_document_id") or winner["document_id"]
+                winner = min(cluster_recs, key=winner_key)
                 for rec in cluster_recs:
                     rec["dedup_cluster_id"] = winner["document_id"]
-                    rec["split_group_id"] = winner_split_group
                 final_retained.append(winner)
                 rejected_count += (len(cluster_recs) - 1)
+
+        # Assign parent_uf component ID as the unified split_group_id for all retained items
+        for rec in final_retained:
+            rec["split_group_id"] = parent_uf.find(rec["split_group_id"])
 
         written_shards = self.shard_io.write_records_to_shards(final_retained, shard_prefix="part")
 

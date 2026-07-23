@@ -4,6 +4,7 @@ from src.tcelm_corpus.storage.parquet_io import ParquetShardIO
 from src.tcelm_corpus.storage.manifest import StageManifest
 from src.tcelm_corpus.storage.checkpoint import StageCheckpointManager
 from src.tcelm_corpus.stages.base_stage import BaseStage
+from src.tcelm_corpus.stages.s09_tokenize_select import Stage09TokenizeSelect
 from src.tcelm_corpus.config import CorpusPipelineConfig
 
 def test_parquet_shard_io_read_write(tmp_path):
@@ -48,18 +49,17 @@ class DummyStage(BaseStage):
         written = self.shard_io.write_records_to_shards(records)
         return {"record_counts": {"docs": 1}, "output_hashes": {"shards": len(written)}}
 
-def test_force_restart_purges_previous_shards(tmp_path):
+def test_force_restart_purges_previous_shards_and_subdirectories(tmp_path):
     output_dir = str(tmp_path)
     config = CorpusPipelineConfig()
 
-    stage = DummyStage(output_dir, config)
-    # First execution
-    res1 = stage.execute(force=False)
-    shards_run1 = stage.shard_io.list_shards()
-    assert len(shards_run1) == 1
+    stage_dir = os.path.join(output_dir, "stages", "09_tokenize_select")
+    layer_a_dir = os.path.join(stage_dir, "layer_a_selected")
+    os.makedirs(layer_a_dir, exist_ok=True)
+    with open(os.path.join(layer_a_dir, "stale_part_00000.parquet"), "w") as f:
+        f.write("stale")
 
-    # Second execution with force=True should PURGE old shards instead of appending part_00001.parquet
-    res2 = stage.execute(force=True)
-    shards_run2 = stage.shard_io.list_shards()
-    assert len(shards_run2) == 1
-    assert os.path.basename(shards_run2[0]) == "part_00000.parquet"
+    stage09 = Stage09TokenizeSelect(output_dir, config)
+    stage09.purge_stage_outputs()
+
+    assert not os.path.exists(os.path.join(layer_a_dir, "stale_part_00000.parquet"))
