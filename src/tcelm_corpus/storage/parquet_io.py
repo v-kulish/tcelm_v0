@@ -19,6 +19,7 @@ class ParquetShardIO:
         schema: Optional[pa.Schema] = None,
         shard_prefix: str = "part"
     ) -> List[str]:
+        os.makedirs(self.stage_dir, exist_ok=True)
         written_shards = []
         batch = []
         shard_idx = len(glob.glob(os.path.join(self.stage_dir, f"{shard_prefix}_*.parquet")))
@@ -44,6 +45,7 @@ class ParquetShardIO:
         shard_idx: int,
         schema: Optional[pa.Schema]
     ) -> str:
+        os.makedirs(self.stage_dir, exist_ok=True)
         shard_filename = f"{shard_prefix}_{shard_idx:05d}.parquet"
         shard_path = os.path.join(self.stage_dir, shard_filename)
         
