@@ -157,6 +157,11 @@ class Stage09TokenizeSelect(BaseStage):
                 if accumulated_tokens >= target_quota:
                     break
 
+            if getattr(self.config, "production_mode", False):
+                diff_ratio = abs(accumulated_tokens - target_quota) / max(target_quota, 1)
+                if diff_ratio > 0.0005:
+                    raise RuntimeError(f"Production Build Failure: Source `{source_name}` quota underfill/overfill ({accumulated_tokens:,} vs target {target_quota:,}, ratio={diff_ratio:.4f} > 0.0005).")
+
             record_counts[source_name] = accumulated_docs
             token_counts[source_name] = accumulated_tokens
             print(f"Source `{source_name}` final post-tokenization quota: {accumulated_docs:,} docs, {accumulated_tokens:,} tokens (Target: {target_quota:,}).")

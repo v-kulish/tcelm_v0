@@ -3,6 +3,8 @@ import pytest
 from src.tcelm_corpus.storage.parquet_io import ParquetShardIO
 from src.tcelm_corpus.storage.manifest import StageManifest
 from src.tcelm_corpus.storage.checkpoint import StageCheckpointManager
+from src.tcelm_corpus.stages.base_stage import BaseStage
+from src.tcelm_corpus.config import CorpusPipelineConfig
 
 def test_parquet_shard_io_read_write(tmp_path):
     stage_dir = str(tmp_path / "stage_test")
@@ -36,3 +38,28 @@ def test_stage_manifest_and_checkpoint(tmp_path):
     chk.mark_shard_completed("shard_00001.parquet")
     assert chk.is_shard_completed("shard_00001.parquet")
     assert not chk.is_shard_completed("shard_00002.parquet")
+
+class DummyStage(BaseStage):
+    def __init__(self, output_dir, config):
+        super().__init__("dummy_stage", output_dir, config)
+
+    def run_stage(self):
+        records = [{"document_id": "d1", "text": "Hello"}]
+        written = self.shard_io.write_records_to_shards(records)
+        return {"record_counts": {"docs": 1}, "output_hashes": {"shards": len(written)}}
+
+def test_force_restart_purges_previous_shards(tmp_path):
+    output_dir = str(tmp_path)
+    config = CorpusPipelineConfig()
+
+    stage = DummyStage(output_dir, config)
+    # First execution
+    res1 = stage.execute(force=False)
+    shards_run1 = stage.shard_io.list_shards()
+    assert len(shards_run1) == 1
+
+    # Second execution with force=True should PURGE old shards instead of appending part_00001.parquet
+    res2 = stage.execute(force=True)
+    shards_run2 = stage.shard_io.list_shards()
+    assert len(shards_run2) == 1
+    assert os.path.basename(shards_run2[0]) == "part_00000.parquet"

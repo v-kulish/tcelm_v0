@@ -60,6 +60,7 @@ class CorpusPipelineConfig:
     seed: int = 42
     oversampling_multiplier: float = 1.35
     target_scale_tokens: int = 3000000000
+    production_mode: bool = False
     max_records_per_source: Optional[int] = None
     sources: List[SourceConfig] = field(default_factory=list)
     deduplication: DedupConfig = field(default_factory=DedupConfig)
@@ -89,12 +90,14 @@ class CorpusPipelineConfig:
         tok = TokenizerConfig(**data.get("tokenizer", {}))
 
         target_scale = target_scale_tokens if target_scale_tokens is not None else data.get("default_target_scale_tokens", 3000000000)
+        is_prod = target_scale >= 1_000_000_000
 
         return cls(
             corpus_version=data.get("corpus_version", "TCELM-Corpus-v0"),
             seed=data.get("seed", 42),
             oversampling_multiplier=data.get("oversampling_multiplier", 1.35),
             target_scale_tokens=target_scale,
+            production_mode=is_prod,
             sources=sources,
             deduplication=dedup,
             decontamination=decontam,

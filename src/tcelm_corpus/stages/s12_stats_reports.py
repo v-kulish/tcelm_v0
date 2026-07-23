@@ -81,6 +81,16 @@ class Stage12StatsReports(BaseStage):
         print("Computing unigram frequency log probabilities on TRAIN split...")
         freq_stats = self.stats_calc.compute_frequencies(tokenized_docs)
 
+        # PERSIST unigram frequency arrays to disk
+        global_unigram_file = os.path.join(self.stage_dir, "unigram_log_probs.json")
+        with open(global_unigram_file, "w", encoding="utf-8") as f:
+            json.dump(freq_stats.global_unigram_log_probs.tolist(), f)
+
+        source_unigram_file = os.path.join(self.stage_dir, "source_unigram_log_probs.json")
+        source_log_probs_serialized = {src: arr.tolist() for src, arr in freq_stats.source_unigram_log_probs.items()}
+        with open(source_unigram_file, "w", encoding="utf-8") as f:
+            json.dump(source_log_probs_serialized, f)
+
         # 2. Read contamination logs if present
         decontam_manifest = os.path.join(self.output_dir, "stages", "06_decontaminate", "contamination_logs.json")
         contamination_logs = []
@@ -110,10 +120,14 @@ class Stage12StatsReports(BaseStage):
             dedup_stats=s05_stats
         )
 
+        output_artifacts = dict(report_files)
+        output_artifacts["global_unigram_log_probs"] = global_unigram_file
+        output_artifacts["source_unigram_log_probs"] = source_unigram_file
+
         return {
             "record_counts": {
                 "canonical_documents": len(canonical_docs),
                 "tokenized_documents": len(tokenized_docs)
             },
-            "output_hashes": report_files
+            "output_hashes": output_artifacts
         }

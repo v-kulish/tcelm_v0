@@ -48,11 +48,12 @@ class CanonicalDocument:
     raw_text_hash: str
     normalized_text_hash: str
     dedup_cluster_id: str
+    split_group_id: str = ""
 
-    normalized_text: str
-    document_type: str
-    domain: str
-    genre: str
+    normalized_text: str = ""
+    document_type: str = "article"
+    domain: str = "web"
+    genre: str = "prose"
 
     structure: StructureSpans = field(default_factory=StructureSpans)
     quality: QualityScores = field(default_factory=QualityScores)
@@ -61,6 +62,8 @@ class CanonicalDocument:
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
+        if not d.get("split_group_id"):
+            d["split_group_id"] = d.get("parent_document_id", d.get("document_id", ""))
         return d
 
 @dataclass

@@ -24,8 +24,10 @@ class Stage07Split(BaseStage):
 
         for rec in all_input:
             doc_id = rec.get("document_id") or rec.get("doc_id")
-            cluster_id = rec.get("dedup_cluster_id") or rec.get("parent_document_id") or doc_id
-            hash_str = f"{cluster_id}:{self.config.seed}"
+            # Must hash split_group_id to guarantee zero parent-family split leakage across segments
+            split_group_id = rec.get("split_group_id") or rec.get("parent_document_id") or rec.get("dedup_cluster_id") or doc_id
+
+            hash_str = f"{split_group_id}:{self.config.seed}"
             score = int(hashlib.md5(hash_str.encode('utf-8')).hexdigest()[:8], 16) / 0xFFFFFFFF
 
             if score < val_share:
@@ -39,6 +41,7 @@ class Stage07Split(BaseStage):
 
             rec["split"] = split
             rec["document_id"] = doc_id
+            rec["split_group_id"] = split_group_id
             split_records.append(rec)
 
             src = rec["source"]

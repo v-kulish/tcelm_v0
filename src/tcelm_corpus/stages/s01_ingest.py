@@ -30,6 +30,8 @@ class Stage01Ingest(BaseStage):
             try:
                 ds = load_dataset(source_name, split="train", streaming=True, revision=revision)
             except Exception as e:
+                if getattr(self.config, "production_mode", False):
+                    raise RuntimeError(f"Production Build Failure: Failed streaming source `{source_name}` (Revision: `{revision}`): {e}")
                 print(f"Warning: Failed streaming `{source_name}` with revision `{revision}`: {e}")
                 continue
 
@@ -40,7 +42,6 @@ class Stage01Ingest(BaseStage):
             # Stream candidates
             for i, raw_item in enumerate(ds):
                 raw_id = str(raw_item.get("id", raw_item.get("doc_id", f"{source_name}_{i}")))
-                # Globally unique, deterministic document ID
                 document_id = hashlib.sha256(f"{source_name}:{raw_id}".encode("utf-8")).hexdigest()[:32]
                 parent_document_id = document_id
 
@@ -55,6 +56,7 @@ class Stage01Ingest(BaseStage):
                 rec = {
                     "document_id": document_id,
                     "parent_document_id": parent_document_id,
+                    "split_group_id": parent_document_id,
                     "source_record_id": raw_id,
                     "source": source_name,
                     "priority": priority,
@@ -80,6 +82,9 @@ class Stage01Ingest(BaseStage):
             if records_batch:
                 shards = self.shard_io.write_records_to_shards(records_batch, shard_prefix="part")
                 all_shards.extend(shards)
+
+            if source_doc_count == 0 and getattr(self.config, "production_mode", False):
+                raise RuntimeError(f"Production Build Failure: Source `{source_name}` yielded 0 records.")
 
             record_counts[source_name] = source_doc_count
             token_counts[source_name] = source_token_count

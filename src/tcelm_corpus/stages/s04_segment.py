@@ -41,6 +41,7 @@ class Stage04Segment(BaseStage):
 
             doc_id = rec.get("document_id") or rec.get("doc_id", "doc")
             parent_id = rec.get("parent_document_id") or doc_id
+            split_group_id = rec.get("split_group_id") or parent_id
 
             cdocs = self.segmenter.segment_document(
                 doc_id=doc_id,
@@ -52,12 +53,15 @@ class Stage04Segment(BaseStage):
             )
 
             for cdoc in cdocs:
+                cdoc.split_group_id = split_group_id
                 rec_dict = cdoc.to_dict()
+                
                 # Convert dataclass fields to JSON strings for Parquet compatibility
                 rec_dict["structure_json"] = json.dumps(rec_dict["structure"])
                 rec_dict["quality_json"] = json.dumps(rec_dict["quality"])
                 rec_dict["position_json"] = json.dumps(rec_dict["position"])
                 rec_dict["priority"] = rec["priority"]
+                rec_dict["split_group_id"] = split_group_id
                 
                 # Remove nested dict fields before Parquet serialization
                 del rec_dict["structure"]

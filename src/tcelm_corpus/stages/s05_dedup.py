@@ -77,6 +77,8 @@ class Stage05Dedup(BaseStage):
         for rec in all_recs:
             if "document_id" not in rec and "doc_id" in rec:
                 rec["document_id"] = rec["doc_id"]
+            if not rec.get("split_group_id"):
+                rec["split_group_id"] = rec.get("parent_document_id") or rec["document_id"]
 
         # 1. Exact Document Deduplication
         exact_map = defaultdict(list)
@@ -177,12 +179,17 @@ class Stage05Dedup(BaseStage):
             if len(cluster_recs) == 1:
                 rec = cluster_recs[0]
                 rec["dedup_cluster_id"] = rec["document_id"]
+                # DO NOT overwrite split_group_id with segment document_id!
+                if not rec.get("split_group_id"):
+                    rec["split_group_id"] = rec.get("parent_document_id", rec["document_id"])
                 final_retained.append(rec)
             else:
                 fuzzy_clusters += 1
                 winner = max(cluster_recs, key=lambda r: (compute_quality_score(r), r["priority"]))
+                winner_split_group = winner.get("split_group_id") or winner.get("parent_document_id") or winner["document_id"]
                 for rec in cluster_recs:
                     rec["dedup_cluster_id"] = winner["document_id"]
+                    rec["split_group_id"] = winner_split_group
                 final_retained.append(winner)
                 rejected_count += (len(cluster_recs) - 1)
 
