@@ -40,9 +40,18 @@ def test_stage_manifest_and_checkpoint(tmp_path):
     assert chk.is_shard_completed("shard_00001.parquet")
     assert not chk.is_shard_completed("shard_00002.parquet")
 
-class DummyStage(BaseStage):
+class DummyStage1(BaseStage):
     def __init__(self, output_dir, config):
-        super().__init__("dummy_stage", output_dir, config)
+        super().__init__("01_ingest", output_dir, config)
+
+    def run_stage(self):
+        records = [{"document_id": "d1", "text": "Hello"}]
+        written = self.shard_io.write_records_to_shards(records)
+        return {"record_counts": {"docs": 1}, "output_hashes": {"shards": len(written)}}
+
+class DummyStage2(BaseStage):
+    def __init__(self, output_dir, config):
+        super().__init__("02_select_pool", output_dir, config)
 
     def run_stage(self):
         records = [{"document_id": "d1", "text": "Hello"}]
@@ -68,13 +77,30 @@ def test_config_change_invalidates_stage_completed(tmp_path):
     output_dir = str(tmp_path)
     config1 = CorpusPipelineConfig(seed=42, target_scale_tokens=1000)
 
-    stage1 = DummyStage(output_dir, config1)
+    stage1 = DummyStage1(output_dir, config1)
     stage1.execute(force=False)
     assert stage1.is_completed()
 
     # Create stage with altered configuration parameter (e.g. final_jaccard=0.85 or seed=99)
     config2 = CorpusPipelineConfig(seed=99, target_scale_tokens=1000)
-    stage2 = DummyStage(output_dir, config2)
+    stage2 = DummyStage1(output_dir, config2)
     
     # is_completed MUST return False due to config_hash mismatch!
+    assert not stage2.is_completed()
+
+def test_upstream_manifest_change_invalidates_downstream_stage(tmp_path):
+    output_dir = str(tmp_path)
+    config = CorpusPipelineConfig(seed=42, target_scale_tokens=1000)
+
+    stage1 = DummyStage1(output_dir, config)
+    stage1.execute(force=False)
+
+    stage2 = DummyStage2(output_dir, config)
+    stage2.execute(force=False)
+    assert stage2.is_completed()
+
+    # Re-run stage 1 with force=True -> updates Stage 1 manifest
+    stage1.execute(force=True)
+
+    # Stage 2 MUST no longer be considered completed because Stage 1 manifest changed!
     assert not stage2.is_completed()

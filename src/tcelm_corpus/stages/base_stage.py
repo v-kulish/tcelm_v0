@@ -10,6 +10,12 @@ from ..storage.manifest import StageManifest
 from ..storage.checkpoint import StageCheckpointManager
 from ..config import CorpusPipelineConfig
 
+STAGE_ORDER = [
+    "01_ingest", "02_select_pool", "03_normalize_clean", "04_segment",
+    "05_dedup", "06_decontaminate", "07_split", "08_train_tokenizer",
+    "09_tokenize_select", "10_freeze", "11_generate_views", "12_stats_reports"
+]
+
 class BaseStage(ABC):
     """
     Abstract base class for disk-backed, sharded, restartable pipeline stages.
@@ -50,7 +56,7 @@ class BaseStage(ABC):
 
     def execute(self, force: bool = False) -> Dict[str, Any]:
         if not force and self.is_completed():
-            print(f"Stage `{self.stage_name}` already completed with matching config hash. Skipping.")
+            print(f"Stage `{self.stage_name}` already completed with matching config and upstream hash. Skipping.")
             return self.manifest.load() or {}
 
         if force or not self.is_completed():
@@ -71,9 +77,24 @@ class BaseStage(ABC):
         )
         return results
 
+    def _get_upstream_stage_name(self) -> Optional[str]:
+        if self.stage_name in STAGE_ORDER:
+            idx = STAGE_ORDER.index(self.stage_name)
+            if idx > 0:
+                return STAGE_ORDER[idx - 1]
+        return None
+
     def _compute_config_hash(self) -> str:
         canonical_json = json.dumps(self.config.to_dict(), sort_keys=True)
-        return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        upstream_hash = ""
+        prev_stage = self._get_upstream_stage_name()
+        if prev_stage:
+            prev_man_path = os.path.join(self.output_dir, "stages", prev_stage, "manifest.json")
+            if os.path.exists(prev_man_path):
+                upstream_hash = StageManifest.compute_file_hash(prev_man_path)
+
+        combo_key = f"{canonical_json}:{upstream_hash}"
+        return hashlib.sha256(combo_key.encode("utf-8")).hexdigest()
 
     @abstractmethod
     def run_stage(self) -> Dict[str, Any]:

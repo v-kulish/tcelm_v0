@@ -59,9 +59,11 @@ def test_full_pipeline_sharded_stages(tmp_path):
     input_ids = json.loads(recs_11[0]["input_token_ids_json"])
     assert isinstance(input_ids, list) and len(input_ids) > 0, "Layer C input_token_ids_json is empty"
 
-    # 6. Assert Stage 12 saved smoothed unigram frequency log probabilities
-    unigram_file = os.path.join(stages_dir, "12_stats_reports", "unigram_log_probs.json")
-    assert os.path.exists(unigram_file), "Unigram log probabilities file missing in Stage 12"
+    # 6. Assert Stage 12 saved smoothed unigram frequency log probabilities in float32 numpy (.npy & .npz) and JSON formats
+    s12_dir = os.path.join(stages_dir, "12_stats_reports")
+    assert os.path.exists(os.path.join(s12_dir, "unigram_log_probs.npy")), "Unigram .npy file missing in Stage 12"
+    assert os.path.exists(os.path.join(s12_dir, "source_unigram_log_probs.npz")), "Source unigram .npz file missing in Stage 12"
+    assert os.path.exists(os.path.join(s12_dir, "unigram_log_probs.json")), "Unigram JSON file missing in Stage 12"
 
     # 7. Assert mandatory reports exist in output/reports/
     reports_dir = os.path.join(output_dir, "reports")

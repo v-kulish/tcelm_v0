@@ -17,8 +17,12 @@ class Stage10Freeze(BaseStage):
 
     def run_stage(self) -> Dict[str, Any]:
         tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
-        if os.path.exists(tok_path):
-            self.tokenizer.load_tokenizer(tok_path)
+        if not os.path.exists(tok_path):
+            raise RuntimeError(f"Freeze Gate Failure: Tokenizer file missing at `{tok_path}` in Stage 10 Freeze.")
+
+        self.tokenizer.load_tokenizer(tok_path)
+        if self.tokenizer.tokenizer is None:
+            raise RuntimeError(f"Freeze Gate Failure: Failed loading tokenizer instance from `{tok_path}`.")
 
         stage_09_dir = os.path.join(self.output_dir, "stages", "09_tokenize_select")
         layer_a_dir = os.path.join(stage_09_dir, "layer_a_selected")
@@ -40,21 +44,20 @@ class Stage10Freeze(BaseStage):
             raise RuntimeError(f"Layer A and Layer B document ID mismatch in Stage 10 Freeze: Layer A has {len(docs_a)} docs, Layer B has {len(docs_b)} docs.")
 
         # Re-encoding verification gate: Layer A text must re-encode to exact Layer B token IDs with zero mismatch
-        if self.tokenizer.tokenizer is not None:
-            for ra, rb in zip(recs_a, recs_b):
-                text_a = ra["normalized_text"]
-                stored_ids_b = json.loads(rb["token_ids_json"])
-                encoded_ids_a = self.tokenizer.tokenizer.encode(text_a).ids
+        for ra, rb in zip(recs_a, recs_b):
+            text_a = ra["normalized_text"]
+            stored_ids_b = json.loads(rb["token_ids_json"])
+            encoded_ids_a = self.tokenizer.tokenizer.encode(text_a).ids
 
-                if encoded_ids_a != stored_ids_b:
-                    mismatch_idx = next(
-                        (i for i, (a, b) in enumerate(zip(encoded_ids_a, stored_ids_b)) if a != b),
-                        min(len(encoded_ids_a), len(stored_ids_b))
-                    )
-                    raise RuntimeError(
-                        f"Freeze Gate Failure: Token ID sequence mismatch for doc `{ra['document_id']}` at index {mismatch_idx} "
-                        f"(Encoded Layer A length={len(encoded_ids_a)} vs Stored Layer B length={len(stored_ids_b)})."
-                    )
+            if encoded_ids_a != stored_ids_b:
+                mismatch_idx = next(
+                    (i for i, (a, b) in enumerate(zip(encoded_ids_a, stored_ids_b)) if a != b),
+                    min(len(encoded_ids_a), len(stored_ids_b))
+                )
+                raise RuntimeError(
+                    f"Freeze Gate Failure: Token ID sequence mismatch for doc `{ra['document_id']}` at index {mismatch_idx} "
+                    f"(Encoded Layer A length={len(encoded_ids_a)} vs Stored Layer B length={len(stored_ids_b)})."
+                )
 
         checksums = {
             "layer_a_shards": {},

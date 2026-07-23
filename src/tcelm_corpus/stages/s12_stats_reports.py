@@ -1,5 +1,6 @@
 import os
 import json
+import numpy as np
 from typing import Dict, Any, List
 from .base_stage import BaseStage
 from ..storage.parquet_io import ParquetShardIO
@@ -81,14 +82,24 @@ class Stage12StatsReports(BaseStage):
         print("Computing unigram frequency log probabilities on TRAIN split...")
         freq_stats = self.stats_calc.compute_frequencies(tokenized_docs)
 
-        # PERSIST unigram frequency arrays to disk
-        global_unigram_file = os.path.join(self.stage_dir, "unigram_log_probs.json")
-        with open(global_unigram_file, "w", encoding="utf-8") as f:
-            json.dump(freq_stats["p_global_log"].tolist(), f)
+        p_global_arr = freq_stats["p_global_log"]
+        p_source_dict = freq_stats["p_source_log"]
 
-        source_unigram_file = os.path.join(self.stage_dir, "source_unigram_log_probs.json")
-        source_log_probs_serialized = {src: arr.tolist() for src, arr in freq_stats["p_source_log"].items()}
-        with open(source_unigram_file, "w", encoding="utf-8") as f:
+        # PERSIST binary float32 numpy arrays (.npy & .npz) for fast training loaders
+        global_unigram_npy = os.path.join(self.stage_dir, "unigram_log_probs.npy")
+        np.save(global_unigram_npy, p_global_arr)
+
+        source_unigram_npz = os.path.join(self.stage_dir, "source_unigram_log_probs.npz")
+        np.savez(source_unigram_npz, **p_source_dict)
+
+        # Also persist JSON files for inspection
+        global_unigram_json = os.path.join(self.stage_dir, "unigram_log_probs.json")
+        with open(global_unigram_json, "w", encoding="utf-8") as f:
+            json.dump(p_global_arr.tolist(), f)
+
+        source_unigram_json = os.path.join(self.stage_dir, "source_unigram_log_probs.json")
+        source_log_probs_serialized = {src: arr.tolist() for src, arr in p_source_dict.items()}
+        with open(source_unigram_json, "w", encoding="utf-8") as f:
             json.dump(source_log_probs_serialized, f)
 
         # 2. Read contamination logs if present
@@ -121,8 +132,10 @@ class Stage12StatsReports(BaseStage):
         )
 
         output_artifacts = dict(report_files)
-        output_artifacts["global_unigram_log_probs"] = global_unigram_file
-        output_artifacts["source_unigram_log_probs"] = source_unigram_file
+        output_artifacts["global_unigram_log_probs_npy"] = global_unigram_npy
+        output_artifacts["source_unigram_log_probs_npz"] = source_unigram_npz
+        output_artifacts["global_unigram_log_probs_json"] = global_unigram_json
+        output_artifacts["source_unigram_log_probs_json"] = source_unigram_json
 
         return {
             "record_counts": {
