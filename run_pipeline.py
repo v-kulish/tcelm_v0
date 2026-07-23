@@ -10,6 +10,7 @@ def main():
     parser.add_argument("--scale", type=str, default="50M", help="Target corpus scale (e.g. 50M, 1B, 3B, 5B)")
     parser.add_argument("--output-dir", type=str, default="output_corpus_run", help="Output directory for artifacts and reports")
     parser.add_argument("--max-records-per-source", type=int, default=None, help="Optional max records per source (for quick local debugging)")
+    parser.add_argument("--force-restart", action="store_true", help="Force re-execution of completed stages")
 
     args = parser.parse_args()
 
@@ -31,19 +32,17 @@ def main():
     runner = CorpusPipelineRunner(
         config_path=args.config,
         output_dir=args.output_dir,
-        target_scale_tokens=target_tokens
+        target_scale_tokens=target_tokens,
+        max_records_per_source=args.max_records_per_source
     )
 
-    summary = runner.run(max_records_per_source=args.max_records_per_source)
+    summary = runner.run(force_restart=args.force_restart)
     print("\n--- Pipeline Run Summary ---")
-    print(f"Canonical Documents Created: {summary['canonical_document_count']}")
-    print(f"Tokenized Documents Encoded: {summary['tokenized_document_count']}")
-    print(f"Causal 4k Views: {summary['causal_view_count']}")
-    print(f"Prefix-Suffix Trajectory Views: {summary['prefix_suffix_view_count']}")
-    print(f"Bridge Masked Views: {summary['bridge_view_count']}")
-    print("Reports Generated:")
-    for rep_name, path in summary['report_files'].items():
-        print(f"  - {rep_name}: {path}")
+    reports_dir = os.path.join(args.output_dir, "reports")
+    if os.path.exists(reports_dir):
+        print(f"Reports directory: {reports_dir}")
+        for rep in sorted(os.listdir(reports_dir)):
+            print(f"  - {rep}")
 
 if __name__ == "__main__":
     main()

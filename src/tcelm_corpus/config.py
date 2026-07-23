@@ -9,6 +9,7 @@ class SourceConfig:
     category: str
     share: float
     quota_3b_tokens: int
+    revision: str = "main"
     min_english_prob: float = 0.50
     min_doc_length: int = 128
     max_doc_length: int = 32768
@@ -25,6 +26,8 @@ class SourceConfig:
 
 @dataclass
 class DedupConfig:
+    num_bands: int = 16
+    rows_per_band: int = 8
     minhash_num_perm: int = 128
     ngram_size: int = 20
     candidate_jaccard: float = 0.85
@@ -57,6 +60,7 @@ class CorpusPipelineConfig:
     seed: int = 42
     oversampling_multiplier: float = 1.35
     target_scale_tokens: int = 3000000000
+    max_records_per_source: Optional[int] = None
     sources: List[SourceConfig] = field(default_factory=list)
     deduplication: DedupConfig = field(default_factory=DedupConfig)
     decontamination: DecontamConfig = field(default_factory=DecontamConfig)

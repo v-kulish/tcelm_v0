@@ -1,0 +1,97 @@
+import os
+import json
+from typing import Dict, Any, List
+from .base_stage import BaseStage
+from ..storage.parquet_io import ParquetShardIO
+from ..stats import TokenFrequencyStats
+from ..reports import MandatoryReportGenerator
+from ..schema import CanonicalDocument, TokenizedDocument, StructureSpans, QualityScores
+
+class Stage12StatsReports(BaseStage):
+    def __init__(self, output_dir: str, config):
+        super().__init__("12_stats_reports", output_dir, config)
+        self.output_dir = output_dir
+        self.layer_a_io = ParquetShardIO(f"{output_dir}/stages/07_split")
+        self.layer_b_io = ParquetShardIO(f"{output_dir}/stages/09_tokenize_select")
+        self.decontam_io = ParquetShardIO(f"{output_dir}/stages/06_decontaminate")
+        self.stats_calc = TokenFrequencyStats(vocab_size=self.config.tokenizer.vocab_size)
+        self.report_gen = MandatoryReportGenerator(os.path.join(output_dir, "reports"))
+
+    def run_stage(self) -> Dict[str, Any]:
+        canonical_docs: List[CanonicalDocument] = []
+        for rec in self.layer_a_io.read_shards():
+            struct_dict = json.loads(rec["structure_json"]) if isinstance(rec.get("structure_json"), str) else rec.get("structure_json", {})
+            spans = StructureSpans(**struct_dict) if isinstance(struct_dict, dict) else StructureSpans()
+
+            cdoc = CanonicalDocument(
+                document_id=rec["doc_id"],
+                parent_document_id=rec.get("parent_document_id", rec["doc_id"]),
+                source=rec["source"],
+                source_revision=rec.get("source_revision", "v0.1"),
+                source_record_id=rec.get("source_record_id", rec["doc_id"]),
+                source_url_or_provenance=rec.get("url", ""),
+                license=rec.get("license_status", "missing"),
+                authors=rec.get("authors", ""),
+                title=rec.get("title", ""),
+                publication_date="",
+                language="en",
+                raw_text_hash=rec.get("raw_text_hash", ""),
+                normalized_text_hash=rec.get("normalized_text_hash", ""),
+                dedup_cluster_id=rec.get("dedup_cluster_id", rec["doc_id"]),
+                normalized_text=rec["normalized_text"],
+                document_type="article",
+                domain=rec.get("domain", "web"),
+                genre="prose",
+                structure=spans,
+                quality=QualityScores(),
+                split=rec.get("split", "train")
+            )
+            canonical_docs.append(cdoc)
+
+        tokenized_docs: List[TokenizedDocument] = []
+        for rec in self.layer_b_io.read_shards():
+            tok_ids = json.loads(rec["token_ids_json"])
+            tdoc = TokenizedDocument(
+                document_id=rec["document_id"],
+                parent_document_id=rec["parent_document_id"],
+                source=rec["source"],
+                split=rec["split"],
+                token_ids=tok_ids
+            )
+            tokenized_docs.append(tdoc)
+
+        # 1. Compute smoothed unigram log probabilities on TRAIN split only
+        print("Computing unigram frequency log probabilities on TRAIN split...")
+        freq_stats = self.stats_calc.compute_frequencies(tokenized_docs)
+
+        # 2. Read contamination logs if present
+        decontam_manifest = os.path.join(self.output_dir, "stages", "06_decontaminate", "contamination_logs.json")
+        contamination_logs = []
+        if os.path.exists(decontam_manifest):
+            with open(decontam_manifest, "r", encoding="utf-8") as f:
+                contamination_logs = json.load(f)
+
+        # 3. Read stage 05 dedup stats
+        dedup_manifest = os.path.join(self.output_dir, "stages", "05_dedup", "manifest.json")
+        dedup_stats = {}
+        if os.path.exists(dedup_manifest):
+            with open(dedup_manifest, "r", encoding="utf-8") as f:
+                d_data = json.load(f)
+                dedup_stats = d_data.get("rejection_counts", {})
+
+        # 4. Generate 7 Mandatory Pre-training Audit Reports
+        report_files = self.report_gen.generate_all_reports(
+            canonical_docs,
+            tokenized_docs,
+            rejection_counts={"quality_rejections": 0},
+            contamination_logs=contamination_logs,
+            dedup_stats=dedup_stats
+        )
+
+        return {
+            "record_counts": {
+                "canonical_documents": len(canonical_docs),
+                "tokenized_documents": len(tokenized_docs)
+            },
+            "output_hashes": report_files
+        }

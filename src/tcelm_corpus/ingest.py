@@ -10,7 +10,7 @@ def compute_deterministic_priority(corpus_version: str, source: str, doc_id: str
     """
     key = f"{corpus_version}:{source}:{doc_id}:{seed}".encode('utf-8')
     digest = hashlib.sha256(key).digest()[:8]
-    val = struct.unpack(">Q", digest)[0] # 64-bit unsigned integer
+    val = struct.unpack(">Q", digest)[0] & 0x7FFFFFFFFFFFFFFF
     return val
 
 @dataclass
