@@ -3,6 +3,7 @@ import glob
 import shutil
 import json
 import hashlib
+import subprocess
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 from ..storage.parquet_io import ParquetShardIO
@@ -16,14 +17,42 @@ STAGE_ORDER = [
     "09_tokenize_select", "10_freeze", "11_generate_views", "12_stats_reports"
 ]
 
+def resolve_code_identity() -> str:
+    """
+    Resolves the exact code version fingerprint using environment variables, git commit SHA,
+    and dirty working tree diff checks.
+    """
+    env_sha = os.environ.get("TCELM_GIT_SHA")
+    if env_sha and env_sha.strip():
+        return env_sha.strip()
+
+    try:
+        git_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode("utf-8").strip()
+
+        is_dirty = bool(
+            subprocess.check_output(["git", "status", "--porcelain"], stderr=subprocess.DEVNULL).strip()
+        )
+        if is_dirty:
+            diff_text = subprocess.check_output(["git", "diff"], stderr=subprocess.DEVNULL)
+            diff_hash = hashlib.sha256(diff_text).hexdigest()[:8]
+            return f"{git_sha}-dirty-{diff_hash}"
+        return git_sha
+    except Exception:
+        return "debug-v0"
+
 class BaseStage(ABC):
     """
     Abstract base class for disk-backed, sharded, restartable pipeline stages.
     """
-    def __init__(self, stage_name: str, output_dir: str, config: CorpusPipelineConfig):
+    STAGE_SCHEMA_VERSION = "v0.1"
+
+    def __init__(self, stage_name: str, output_dir: str, config: CorpusPipelineConfig, code_identity: Optional[str] = None):
         self.stage_name = stage_name
         self.config = config
         self.output_dir = output_dir
+        self.code_identity = code_identity or resolve_code_identity()
         self.stage_dir = os.path.join(output_dir, "stages", stage_name)
         os.makedirs(self.stage_dir, exist_ok=True)
 
@@ -31,11 +60,17 @@ class BaseStage(ABC):
         self.manifest = StageManifest(self.stage_dir)
         self.checkpoint = StageCheckpointManager(self.stage_dir)
 
+    def get_additional_cache_inputs(self) -> Dict[str, str]:
+        """
+        Overridable hook for stages that depend on external artifacts (e.g. tokenizer.json).
+        """
+        return {}
+
     def is_completed(self) -> bool:
         man_data = self.manifest.load()
         if not man_data or man_data.get("status") != "SUCCESS":
             return False
-        return man_data.get("config_hash") == self._compute_config_hash()
+        return man_data.get("config_hash") == self._compute_stage_cache_key()
 
     def purge_stage_outputs(self):
         """
@@ -56,7 +91,7 @@ class BaseStage(ABC):
 
     def execute(self, force: bool = False) -> Dict[str, Any]:
         if not force and self.is_completed():
-            print(f"Stage `{self.stage_name}` already completed with matching config and upstream hash. Skipping.")
+            print(f"Stage `{self.stage_name}` already completed with matching cache key. Skipping.")
             return self.manifest.load() or {}
 
         if force or not self.is_completed():
@@ -68,7 +103,8 @@ class BaseStage(ABC):
         self.manifest.save(
             stage_name=self.stage_name,
             status="SUCCESS",
-            config_hash=self._compute_config_hash(),
+            config_hash=self._compute_stage_cache_key(),
+            code_commit=self.code_identity,
             seed=self.config.seed,
             record_counts=results.get("record_counts", {}),
             token_counts=results.get("token_counts", {}),
@@ -84,8 +120,8 @@ class BaseStage(ABC):
                 return STAGE_ORDER[idx - 1]
         return None
 
-    def _compute_config_hash(self) -> str:
-        canonical_json = json.dumps(self.config.to_dict(), sort_keys=True)
+    def _compute_stage_cache_key(self) -> str:
+        canonical_config_json = json.dumps(self.config.to_dict(), sort_keys=True)
         upstream_hash = ""
         prev_stage = self._get_upstream_stage_name()
         if prev_stage:
@@ -93,8 +129,20 @@ class BaseStage(ABC):
             if os.path.exists(prev_man_path):
                 upstream_hash = StageManifest.compute_file_hash(prev_man_path)
 
-        combo_key = f"{canonical_json}:{upstream_hash}"
-        return hashlib.sha256(combo_key.encode("utf-8")).hexdigest()
+        add_inputs = self.get_additional_cache_inputs()
+        add_inputs_json = json.dumps(add_inputs, sort_keys=True)
+
+        payload = {
+            "stage_name": self.stage_name,
+            "stage_schema_version": self.STAGE_SCHEMA_VERSION,
+            "config": canonical_config_json,
+            "code_identity": self.code_identity,
+            "upstream_manifest_sha256": upstream_hash,
+            "additional_cache_inputs": add_inputs_json
+        }
+
+        key_json = json.dumps(payload, sort_keys=True)
+        return hashlib.sha256(key_json.encode("utf-8")).hexdigest()
 
     @abstractmethod
     def run_stage(self) -> Dict[str, Any]:

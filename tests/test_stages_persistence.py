@@ -41,8 +41,8 @@ def test_stage_manifest_and_checkpoint(tmp_path):
     assert not chk.is_shard_completed("shard_00002.parquet")
 
 class DummyStage1(BaseStage):
-    def __init__(self, output_dir, config):
-        super().__init__("01_ingest", output_dir, config)
+    def __init__(self, output_dir, config, code_identity=None):
+        super().__init__("01_ingest", output_dir, config, code_identity=code_identity)
 
     def run_stage(self):
         records = [{"document_id": "d1", "text": "Hello"}]
@@ -50,8 +50,8 @@ class DummyStage1(BaseStage):
         return {"record_counts": {"docs": 1}, "output_hashes": {"shards": len(written)}}
 
 class DummyStage2(BaseStage):
-    def __init__(self, output_dir, config):
-        super().__init__("02_select_pool", output_dir, config)
+    def __init__(self, output_dir, config, code_identity=None):
+        super().__init__("02_select_pool", output_dir, config, code_identity=code_identity)
 
     def run_stage(self):
         records = [{"document_id": "d1", "text": "Hello"}]
@@ -104,3 +104,15 @@ def test_upstream_manifest_change_invalidates_downstream_stage(tmp_path):
 
     # Stage 2 MUST no longer be considered completed because Stage 1 manifest changed!
     assert not stage2.is_completed()
+
+def test_code_identity_change_invalidates_stage_cache(tmp_path):
+    output_dir = str(tmp_path)
+    config = CorpusPipelineConfig(seed=42, target_scale_tokens=1000)
+
+    stage1 = DummyStage1(output_dir, config, code_identity="commit_v1")
+    stage1.execute(force=False)
+    assert stage1.is_completed()
+
+    # Create stage with different code commit SHA
+    stage1_updated = DummyStage1(output_dir, config, code_identity="commit_v2")
+    assert not stage1_updated.is_completed()

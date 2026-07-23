@@ -2,6 +2,7 @@ import os
 from typing import Dict, Any, List
 from .base_stage import BaseStage
 from ..storage.parquet_io import ParquetShardIO
+from ..storage.manifest import StageManifest
 from ..tokenizer import BPECorpusTokenizer
 
 class Stage08TrainTokenizer(BaseStage):
@@ -39,8 +40,13 @@ class Stage08TrainTokenizer(BaseStage):
         print(f"Training 32,768 Byte-Level BPE Tokenizer on {len(train_texts):,} TRAIN split text samples...")
         self.tokenizer.train_from_texts(train_texts, save_path=tok_path)
 
+        tokenizer_sha256 = StageManifest.compute_file_hash(tok_path)
+
         return {
             "record_counts": {"sample_training_documents": len(train_texts)},
             "token_counts": source_sample_counts,
-            "output_hashes": {"tokenizer_json": tok_path}
+            "output_hashes": {
+                "tokenizer_json": tok_path,
+                "tokenizer_sha256": tokenizer_sha256
+            }
         }

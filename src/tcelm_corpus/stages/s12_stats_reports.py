@@ -2,8 +2,10 @@ import os
 import json
 import numpy as np
 from typing import Dict, Any, List
+from collections import defaultdict
 from .base_stage import BaseStage
 from ..storage.parquet_io import ParquetShardIO
+from ..storage.manifest import StageManifest
 from ..stats import TokenFrequencyStats
 from ..reports import MandatoryReportGenerator
 from ..schema import CanonicalDocument, TokenizedDocument, StructureSpans, QualityScores
@@ -64,6 +66,9 @@ class Stage12StatsReports(BaseStage):
             canonical_docs.append(cdoc)
 
         tokenized_docs: List[TokenizedDocument] = []
+        source_train_tokens = defaultdict(int)
+        total_train_tokens = 0
+
         for rec in all_b:
             doc_id = rec.get("document_id") or rec.get("doc_id")
             parent_id = rec.get("parent_document_id") or doc_id
@@ -77,6 +82,11 @@ class Stage12StatsReports(BaseStage):
                 token_ids=tok_ids
             )
             tokenized_docs.append(tdoc)
+
+            if rec["split"] == "train":
+                tok_len = len(tok_ids)
+                source_train_tokens[rec["source"]] += tok_len
+                total_train_tokens += tok_len
 
         # 1. Compute smoothed unigram log probabilities on TRAIN split only
         print("Computing unigram frequency log probabilities on TRAIN split...")
@@ -101,6 +111,36 @@ class Stage12StatsReports(BaseStage):
         source_log_probs_serialized = {src: arr.tolist() for src, arr in p_source_dict.items()}
         with open(source_unigram_json, "w", encoding="utf-8") as f:
             json.dump(source_log_probs_serialized, f)
+
+        # Read tokenizer and freeze manifest hashes for metadata companion
+        tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
+        tok_sha256 = StageManifest.compute_file_hash(tok_path) if os.path.exists(tok_path) else "unknown"
+
+        freeze_path = os.path.join(self.output_dir, "stages", "10_freeze", "freeze_manifest.json")
+        freeze_sha256 = StageManifest.compute_file_hash(freeze_path) if os.path.exists(freeze_path) else "unknown"
+
+        # Generate Frequency Companion Metadata Manifest
+        freq_meta = {
+            "schema_version": 1,
+            "corpus_version": self.config.corpus_version,
+            "dtype": "float32",
+            "vocab_size": self.config.tokenizer.vocab_size,
+            "smoothing_alpha": 0.1,
+            "total_train_tokens": total_train_tokens,
+            "total_train_documents": len([d for d in tokenized_docs if d.split == "train"]),
+            "tokenizer_sha256": tok_sha256,
+            "freeze_manifest_sha256": freeze_sha256,
+            "global_unigram_file": "unigram_log_probs.npy",
+            "global_unigram_shape": list(p_global_arr.shape),
+            "global_unigram_npy_sha256": StageManifest.compute_file_hash(global_unigram_npy),
+            "source_unigram_file": "source_unigram_log_probs.npz",
+            "source_unigram_npz_sha256": StageManifest.compute_file_hash(source_unigram_npz),
+            "source_train_tokens": dict(source_train_tokens)
+        }
+
+        freq_meta_path = os.path.join(self.stage_dir, "frequency_metadata.json")
+        with open(freq_meta_path, "w", encoding="utf-8") as f:
+            json.dump(freq_meta, f, indent=2)
 
         # 2. Read contamination logs if present
         decontam_manifest = os.path.join(self.output_dir, "stages", "06_decontaminate", "contamination_logs.json")
@@ -132,6 +172,7 @@ class Stage12StatsReports(BaseStage):
         )
 
         output_artifacts = dict(report_files)
+        output_artifacts["frequency_metadata_json"] = freq_meta_path
         output_artifacts["global_unigram_log_probs_npy"] = global_unigram_npy
         output_artifacts["source_unigram_log_probs_npz"] = source_unigram_npz
         output_artifacts["global_unigram_log_probs_json"] = global_unigram_json

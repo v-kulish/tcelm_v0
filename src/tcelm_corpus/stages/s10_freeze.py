@@ -15,6 +15,12 @@ class Stage10Freeze(BaseStage):
             special_tokens=self.config.tokenizer.special_tokens
         )
 
+    def get_additional_cache_inputs(self) -> Dict[str, str]:
+        tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
+        if os.path.exists(tok_path):
+            return {"tokenizer_sha256": StageManifest.compute_file_hash(tok_path)}
+        return {}
+
     def run_stage(self) -> Dict[str, Any]:
         tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
         if not os.path.exists(tok_path):
@@ -23,6 +29,17 @@ class Stage10Freeze(BaseStage):
         self.tokenizer.load_tokenizer(tok_path)
         if self.tokenizer.tokenizer is None:
             raise RuntimeError(f"Freeze Gate Failure: Failed loading tokenizer instance from `{tok_path}`.")
+
+        current_tok_sha256 = StageManifest.compute_file_hash(tok_path)
+
+        # Check Stage 09 tokenizer SHA256 if recorded
+        s09_man_path = os.path.join(self.output_dir, "stages", "09_tokenize_select", "manifest.json")
+        if os.path.exists(s09_man_path):
+            with open(s09_man_path, "r", encoding="utf-8") as f:
+                s09_man = json.load(f)
+                s09_tok_sha = s09_man.get("output_hashes", {}).get("tokenizer_sha256")
+                if s09_tok_sha and s09_tok_sha != current_tok_sha256:
+                    raise RuntimeError(f"Freeze Gate Failure: Tokenizer SHA-256 mismatch (Stage 09: {s09_tok_sha[:10]}... vs Stage 10: {current_tok_sha256[:10]}...).")
 
         stage_09_dir = os.path.join(self.output_dir, "stages", "09_tokenize_select")
         layer_a_dir = os.path.join(stage_09_dir, "layer_a_selected")
@@ -44,9 +61,11 @@ class Stage10Freeze(BaseStage):
             raise RuntimeError(f"Layer A and Layer B document ID mismatch in Stage 10 Freeze: Layer A has {len(docs_a)} docs, Layer B has {len(docs_b)} docs.")
 
         # Re-encoding verification gate: Layer A text must re-encode to exact Layer B token IDs with zero mismatch
+        total_tokens = 0
         for ra, rb in zip(recs_a, recs_b):
             text_a = ra["normalized_text"]
             stored_ids_b = json.loads(rb["token_ids_json"])
+            total_tokens += len(stored_ids_b)
             encoded_ids_a = self.tokenizer.tokenizer.encode(text_a).ids
 
             if encoded_ids_a != stored_ids_b:
@@ -60,6 +79,13 @@ class Stage10Freeze(BaseStage):
                 )
 
         checksums = {
+            "corpus_version": self.config.corpus_version,
+            "configuration_sha256": self._compute_stage_cache_key(),
+            "code_commit": self.code_identity,
+            "tokenizer_sha256": current_tok_sha256,
+            "tokenizer_vocab_size": self.config.tokenizer.vocab_size,
+            "verified_documents": len(docs_a),
+            "verified_tokens": total_tokens,
             "layer_a_shards": {},
             "layer_b_shards": {}
         }
@@ -74,12 +100,16 @@ class Stage10Freeze(BaseStage):
         with open(freeze_file, "w", encoding="utf-8") as f:
             json.dump(checksums, f, indent=2)
 
-        print(f"Frozen corpus checksum manifest written to `{freeze_file}` ({len(docs_a):,} documents verified 1-to-1).")
+        print(f"Frozen corpus checksum manifest written to `{freeze_file}` ({len(docs_a):,} documents, {total_tokens:,} tokens verified 1-to-1).")
         return {
             "record_counts": {
                 "verified_documents": len(docs_a),
+                "verified_tokens": total_tokens,
                 "layer_a_shards": len(checksums["layer_a_shards"]),
                 "layer_b_shards": len(checksums["layer_b_shards"])
             },
-            "output_hashes": {"freeze_manifest": freeze_file}
+            "output_hashes": {
+                "freeze_manifest": freeze_file,
+                "tokenizer_sha256": current_tok_sha256
+            }
         }

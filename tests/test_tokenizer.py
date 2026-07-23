@@ -3,6 +3,7 @@ import os
 import json
 from src.tcelm_corpus.tokenizer import BPECorpusTokenizer
 from src.tcelm_corpus.schema import CanonicalDocument, QualityScores, SegmentPosition, StructureSpans
+from src.tcelm_corpus.stages.s09_tokenize_select import Stage09TokenizeSelect
 from src.tcelm_corpus.stages.s10_freeze import Stage10Freeze
 from src.tcelm_corpus.config import CorpusPipelineConfig
 from src.tcelm_corpus.storage.parquet_io import ParquetShardIO
@@ -79,3 +80,25 @@ def test_freeze_gate_fails_on_same_length_token_mismatch(tmp_path):
     freeze_stage = Stage10Freeze(output_dir, config)
     with pytest.raises(RuntimeError, match="Freeze Gate Failure: Token ID sequence mismatch"):
         freeze_stage.run_stage()
+
+def test_tokenizer_file_modification_invalidates_stage09_cache_inputs(tmp_path):
+    output_dir = str(tmp_path)
+    config = CorpusPipelineConfig()
+
+    tok_dir = os.path.join(output_dir, "stages", "08_train_tokenizer")
+    os.makedirs(tok_dir, exist_ok=True)
+    tok_path = os.path.join(tok_dir, "tokenizer.json")
+    with open(tok_path, "w") as f:
+        f.write("tokenizer_v1")
+
+    stage09 = Stage09TokenizeSelect(output_dir, config)
+    key1 = stage09._compute_stage_cache_key()
+
+    # Modify tokenizer.json content
+    with open(tok_path, "w") as f:
+        f.write("tokenizer_v2_altered")
+
+    key2 = stage09._compute_stage_cache_key()
+
+    # Cache key MUST change due to get_additional_cache_inputs() hook!
+    assert key1 != key2

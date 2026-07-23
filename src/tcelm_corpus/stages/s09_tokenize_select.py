@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 from collections import defaultdict
 from .base_stage import BaseStage
 from ..storage.parquet_io import ParquetShardIO
+from ..storage.manifest import StageManifest
 from ..tokenizer import BPECorpusTokenizer
 from ..schema import CanonicalDocument, StructureSpans
 from ..segmentation import StructuralSegmenter
@@ -29,10 +30,17 @@ class Stage09TokenizeSelect(BaseStage):
         )
         self.segmenter = StructuralSegmenter()
 
+    def get_additional_cache_inputs(self) -> Dict[str, str]:
+        tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
+        if os.path.exists(tok_path):
+            return {"tokenizer_sha256": StageManifest.compute_file_hash(tok_path)}
+        return {}
+
     def run_stage(self) -> Dict[str, Any]:
         tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
         if os.path.exists(tok_path):
             self.tokenizer.load_tokenizer(tok_path)
+            tok_sha256 = StageManifest.compute_file_hash(tok_path)
         else:
             raise RuntimeError(f"Tokenizer file not found at `{tok_path}` in Stage 09 TokenizeSelect.")
 
@@ -174,6 +182,7 @@ class Stage09TokenizeSelect(BaseStage):
             "token_counts": token_counts,
             "output_hashes": {
                 "layer_a_shards": len(shards_a),
-                "layer_b_shards": len(shards_b)
+                "layer_b_shards": len(shards_b),
+                "tokenizer_sha256": tok_sha256
             }
         }
