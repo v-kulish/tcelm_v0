@@ -84,10 +84,10 @@ class Stage12StatsReports(BaseStage):
         # PERSIST unigram frequency arrays to disk
         global_unigram_file = os.path.join(self.stage_dir, "unigram_log_probs.json")
         with open(global_unigram_file, "w", encoding="utf-8") as f:
-            json.dump(freq_stats.global_unigram_log_probs.tolist(), f)
+            json.dump(freq_stats["p_global_log"].tolist(), f)
 
         source_unigram_file = os.path.join(self.stage_dir, "source_unigram_log_probs.json")
-        source_log_probs_serialized = {src: arr.tolist() for src, arr in freq_stats.source_unigram_log_probs.items()}
+        source_log_probs_serialized = {src: arr.tolist() for src, arr in freq_stats["p_source_log"].items()}
         with open(source_unigram_file, "w", encoding="utf-8") as f:
             json.dump(source_log_probs_serialized, f)
 
