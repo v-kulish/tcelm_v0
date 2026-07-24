@@ -11,9 +11,10 @@ class Stage02SelectPool(BaseStage):
     def run_stage(self) -> Dict[str, Any]:
         source_records = defaultdict(list)
         
-        # Read all ingested candidates from stage 01 regardless of prefix
+        # Read all ingested candidates from stage 01 eligible for balanced pool
         for row in self.input_io.read_shards():
-            source_records[row["source"]].append(row)
+            if row.get("eligible_for_balanced_pool", True) is True:
+                source_records[row["source"]].append(row)
 
         if not source_records:
             raise RuntimeError("Stage '02_select_pool' received 0 input records from Stage 01.")

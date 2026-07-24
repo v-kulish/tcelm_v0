@@ -16,14 +16,15 @@ class DerivedViewGenerator:
         split: str,
         view_type: str,
         view_counter: int,
-        eos_id: int = 1
+        eos_id: int = 1,
+        extra_metadata: Optional[Dict[str, Any]] = None
     ) -> LayerCViewRecord:
         C = self.ctx_length
         R = min(len(real_sequence), C + 1)
 
         seq = list(real_sequence[:R])
-        padding_count = (C + 1) - R
-        seq.extend([eos_id] * padding_count)
+        sequence_padding_count = (C + 1) - R
+        seq.extend([eos_id] * sequence_padding_count)
 
         input_ids = seq[:-1]
         target_ids = seq[1:]
@@ -43,6 +44,15 @@ class DerivedViewGenerator:
         assert sum(loss_mask) == max(0, R - 1)
         assert sum(attention_mask) == min(R, C)
 
+        meta = dict(extra_metadata or {})
+        meta.update({
+            "doc_count": len(source_document_ids),
+            "real_sequence_length": R,
+            "sequence_padding_count": sequence_padding_count,
+            "input_padding_count": C - valid_input_count,
+            "masked_target_count": C - valid_target_count
+        })
+
         return LayerCViewRecord(
             view_id=f"{split}_{view_type}_{view_counter}",
             split=split,
@@ -57,7 +67,7 @@ class DerivedViewGenerator:
             horizon=1,
             relation="causal" if "single" in view_type else "causal_packed",
             sampling_seed=self.seed,
-            metadata={"doc_count": len(source_document_ids)}
+            metadata=meta
         )
 
     def generate_causal_packing_views(
@@ -88,6 +98,7 @@ class DerivedViewGenerator:
             # Documents at least context length (C-1) or packing disabled mode -> Single Document View
             if len(tokens) >= (self.ctx_length - 1) or not allow_packing:
                 needed_len = self.ctx_length + 1
+                start_idx = 0
                 if len(tokens) >= needed_len:
                     r = self.rng.random()
                     if r < 0.60 and doc.paragraph_token_spans:
@@ -106,7 +117,8 @@ class DerivedViewGenerator:
                         split=split,
                         view_type="causal_single_doc",
                         view_counter=view_counter,
-                        eos_id=eos_id
+                        eos_id=eos_id,
+                        extra_metadata={"start_idx": start_idx}
                     )
                     views.append(v_record)
                     view_counter += 1

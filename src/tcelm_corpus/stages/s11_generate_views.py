@@ -1,5 +1,6 @@
 import os
 import json
+import hashlib
 from typing import Dict, Any, List
 from collections import defaultdict
 from tqdm import tqdm
@@ -22,29 +23,96 @@ class Stage11GenerateViews(BaseStage):
             special_tokens=self.config.tokenizer.special_tokens
         )
 
+    def _compute_current_layer_b_digest(self) -> str:
+        layer_b_dir = os.path.join(self.output_dir, "stages", "09_tokenize_select", "layer_b_selected")
+        if not os.path.exists(layer_b_dir):
+            raise RuntimeError(f"Freeze Verification Failure: Layer B directory missing at `{layer_b_dir}` in Stage 11 cache key calculation.")
+        
+        shard_files = sorted([f for f in os.listdir(layer_b_dir) if f.endswith(".parquet")])
+        if not shard_files:
+            raise RuntimeError(f"Freeze Verification Failure: 0 Layer B Parquet shards found in `{layer_b_dir}` in Stage 11 cache key calculation.")
+        
+        items = []
+        for sf in shard_files:
+            sp = os.path.join(layer_b_dir, sf)
+            sz = os.path.getsize(sp)
+            h = StageManifest.compute_file_hash(sp)
+            items.append((sf, sz, h))
+
+        return hashlib.sha256(json.dumps(items, sort_keys=True).encode("utf-8")).hexdigest()
+
     def get_additional_cache_inputs(self) -> Dict[str, str]:
         tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
-        freeze_man_path = os.path.join(self.output_dir, "stages", "10_freeze", "manifest.json")
-        cache_inputs = {}
-        if os.path.exists(tok_path):
-            cache_inputs["tokenizer_sha256"] = StageManifest.compute_file_hash(tok_path)
-        if os.path.exists(freeze_man_path):
-            cache_inputs["freeze_manifest_sha256"] = StageManifest.compute_file_hash(freeze_man_path)
-        return cache_inputs
+        freeze_man_path = os.path.join(self.output_dir, "stages", "10_freeze", "freeze_manifest.json")
+
+        if not os.path.exists(tok_path):
+            raise RuntimeError(f"Freeze Verification Failure: Tokenizer missing at `{tok_path}` in Stage 11 cache key calculation.")
+
+        if not os.path.exists(freeze_man_path):
+            raise RuntimeError(f"Freeze Verification Failure: Stage 10 freeze_manifest.json missing at `{freeze_man_path}` in Stage 11 cache key calculation.")
+
+        tok_sha = StageManifest.compute_file_hash(tok_path)
+        freeze_sha = StageManifest.compute_file_hash(freeze_man_path)
+        layer_b_digest = self._compute_current_layer_b_digest()
+
+        return {
+            "tokenizer_sha256": tok_sha,
+            "freeze_manifest_sha256": freeze_sha,
+            "current_layer_b_artifact_digest": layer_b_digest
+        }
 
     def run_stage(self) -> Dict[str, Any]:
         tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
+        freeze_man_path = os.path.join(self.output_dir, "stages", "10_freeze", "freeze_manifest.json")
+
         if not os.path.exists(tok_path):
             raise RuntimeError(f"Tokenizer file missing at `{tok_path}` in Stage 11 GenerateViews.")
-        
+
+        if not os.path.exists(freeze_man_path):
+            raise RuntimeError(f"Freeze Verification Failure: Required freeze manifest missing at `{freeze_man_path}` in Stage 11 GenerateViews.")
+
         tok_sha256 = StageManifest.compute_file_hash(tok_path)
-        s10_man_path = os.path.join(self.output_dir, "stages", "10_freeze", "manifest.json")
-        if os.path.exists(s10_man_path):
-            with open(s10_man_path, "r", encoding="utf-8") as f:
-                s10_man = json.load(f)
-                s10_tok_sha = s10_man.get("output_hashes", {}).get("tokenizer_sha256")
-                if s10_tok_sha and tok_sha256 != s10_tok_sha:
-                    raise RuntimeError(f"Tokenizer Mismatch: Stage 11 active tokenizer hash ({tok_sha256[:10]}...) does not match Stage 10 Freeze manifest ({s10_tok_sha[:10]}...).")
+
+        with open(freeze_man_path, "r", encoding="utf-8") as f:
+            freeze_man = json.load(f)
+
+        frozen_tok_sha = freeze_man.get("tokenizer_sha256")
+        if not frozen_tok_sha or tok_sha256 != frozen_tok_sha:
+            raise RuntimeError(f"Tokenizer Mismatch: Active Stage 11 tokenizer hash ({tok_sha256[:10]}...) does not match Stage 10 freeze_manifest.json ({str(frozen_tok_sha)[:10]}...).")
+
+        # Layer B Shard Hash & Path Verification against Stage 10 freeze_manifest.json
+        frozen_shards_info = freeze_man.get("layer_b_shards", {})
+        layer_b_dir = os.path.join(self.output_dir, "stages", "09_tokenize_select", "layer_b_selected")
+        current_shard_files = sorted([f for f in os.listdir(layer_b_dir) if f.endswith(".parquet")])
+        current_shard_rel_paths = set(current_shard_files)
+
+        expected_shard_rel_paths = set(os.path.basename(p) for p in frozen_shards_info.keys())
+
+        if current_shard_rel_paths != expected_shard_rel_paths:
+            raise RuntimeError(f"Layer B Shard Set Mismatch: Current Layer B shards ({sorted(current_shard_rel_paths)}) do not match Stage 10 freeze manifest ({sorted(expected_shard_rel_paths)}).")
+
+        for sf in current_shard_files:
+            sp = os.path.join(layer_b_dir, sf)
+            current_hash = StageManifest.compute_file_hash(sp)
+            current_size = os.path.getsize(sp)
+            
+            matching_key = next((k for k in frozen_shards_info.keys() if os.path.basename(k) == sf), None)
+            if not matching_key:
+                raise RuntimeError(f"Freeze Verification Failure: Shard `{sf}` missing from freeze manifest.")
+
+            expected_info = frozen_shards_info[matching_key]
+            if isinstance(expected_info, str):
+                expected_hash = expected_info
+                expected_size = None
+            else:
+                expected_hash = expected_info.get("sha256")
+                expected_size = expected_info.get("size_bytes")
+
+            if current_hash != expected_hash:
+                raise RuntimeError(f"Layer B Shard Hash Violation: Shard `{sf}` SHA-256 ({current_hash}) does not match frozen checksum ({expected_hash}). Data modified after freeze!")
+
+            if expected_size is not None and current_size != expected_size:
+                raise RuntimeError(f"Layer B Shard Size Violation: Shard `{sf}` byte size ({current_size}) does not match frozen byte size ({expected_size}).")
 
         self.tokenizer.load_tokenizer(tok_path)
 
