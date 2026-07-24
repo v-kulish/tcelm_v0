@@ -10,6 +10,9 @@ from ..stats import TokenFrequencyStats
 from ..reports import MandatoryReportGenerator
 from ..schema import CanonicalDocument, TokenizedDocument, StructureSpans, QualityScores
 
+def sanitize_npz_key(source_name: str) -> str:
+    return source_name.replace("/", "_").replace("-", "_").replace(".", "_")
+
 class Stage12StatsReports(BaseStage):
     def __init__(self, output_dir: str, config):
         super().__init__("12_stats_reports", output_dir, config)
@@ -21,14 +24,45 @@ class Stage12StatsReports(BaseStage):
         self.stats_calc = TokenFrequencyStats(vocab_size=self.config.tokenizer.vocab_size)
         self.report_gen = MandatoryReportGenerator(os.path.join(output_dir, "reports"))
 
+    def get_additional_cache_inputs(self) -> Dict[str, str]:
+        tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
+        freeze_path = os.path.join(self.output_dir, "stages", "10_freeze", "freeze_manifest.json")
+        inputs = {}
+        if os.path.exists(tok_path):
+            inputs["tokenizer_sha256"] = StageManifest.compute_file_hash(tok_path)
+        if os.path.exists(freeze_path):
+            inputs["freeze_manifest_sha256"] = StageManifest.compute_file_hash(freeze_path)
+        return inputs
+
     def run_stage(self) -> Dict[str, Any]:
         s08_man_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "manifest.json")
         if not os.path.exists(s08_man_path):
             raise RuntimeError(f"Frequency Metadata Failure: Stage 08 manifest missing at `{s08_man_path}`.")
+        with open(s08_man_path, "r", encoding="utf-8") as f:
+            s08_man = json.load(f)
+            s08_tok_sha = s08_man.get("output_hashes", {}).get("tokenizer_sha256")
+            if not s08_tok_sha:
+                raise RuntimeError("Frequency Metadata Failure: Stage 08 manifest missing `tokenizer_sha256`.")
 
         freeze_path = os.path.join(self.output_dir, "stages", "10_freeze", "freeze_manifest.json")
         if not os.path.exists(freeze_path):
             raise RuntimeError(f"Frequency Metadata Failure: Stage 10 freeze manifest missing at `{freeze_path}`.")
+        with open(freeze_path, "r", encoding="utf-8") as f:
+            freeze_man = json.load(f)
+            freeze_tok_sha = freeze_man.get("tokenizer_sha256")
+            if not freeze_tok_sha:
+                raise RuntimeError("Frequency Metadata Failure: Freeze manifest missing `tokenizer_sha256`.")
+
+        tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
+        if not os.path.exists(tok_path):
+            raise RuntimeError(f"Frequency Metadata Failure: Tokenizer file missing at `{tok_path}`.")
+
+        current_tok_sha = StageManifest.compute_file_hash(tok_path)
+        if not (s08_tok_sha == freeze_tok_sha == current_tok_sha):
+            raise RuntimeError(
+                f"Frequency Metadata Failure: Tokenizer SHA-256 mismatch: "
+                f"Stage 08={s08_tok_sha[:10]}... vs Freeze={freeze_tok_sha[:10]}... vs Current={current_tok_sha[:10]}..."
+            )
 
         all_a = list(self.layer_a_io.read_shards())
         all_b = list(self.layer_b_io.read_shards())
@@ -101,6 +135,14 @@ class Stage12StatsReports(BaseStage):
         p_source_dict = freq_stats["p_source_log"]
         total_train_tokens = freq_stats["total_train_tokens"]
 
+        # Validate token count sum & source set consistency
+        sum_source_tokens = sum(source_train_tokens.values())
+        if sum_source_tokens != total_train_tokens:
+            raise RuntimeError(f"Frequency Consistency Failure: Sum of per-source train tokens ({sum_source_tokens:,}) does not equal global train tokens ({total_train_tokens:,}).")
+
+        if set(source_train_tokens.keys()) != set(p_source_dict.keys()):
+            raise RuntimeError(f"Frequency Consistency Failure: Per-source token sources ({set(source_train_tokens.keys())}) do not match frequency stats sources ({set(p_source_dict.keys())}).")
+
         # Validate array shapes, float32 dtype, and finite values
         expected_shape = (self.config.tokenizer.vocab_size,)
         if p_global_arr.shape != expected_shape or p_global_arr.dtype != np.float32 or not np.all(np.isfinite(p_global_arr)):
@@ -115,7 +157,7 @@ class Stage12StatsReports(BaseStage):
         np.save(global_unigram_npy, p_global_arr)
 
         source_unigram_npz = os.path.join(self.stage_dir, "source_unigram_log_probs.npz")
-        np.savez(source_unigram_npz, **p_source_dict)
+        np.savez(source_unigram_npz, **{sanitize_npz_key(k): v for k, v in p_source_dict.items()})
 
         # Also persist JSON files for inspection
         global_unigram_json = os.path.join(self.stage_dir, "unigram_log_probs.json")
@@ -127,10 +169,8 @@ class Stage12StatsReports(BaseStage):
         with open(source_unigram_json, "w", encoding="utf-8") as f:
             json.dump(source_log_probs_serialized, f)
 
-        # Read tokenizer and freeze manifest hashes for metadata companion
-        tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
-        tok_sha256 = StageManifest.compute_file_hash(tok_path)
         freeze_sha256 = StageManifest.compute_file_hash(freeze_path)
+        source_keys_map = {sanitize_npz_key(src): src for src in p_source_dict.keys()}
 
         # Generate Frequency Companion Metadata Manifest
         freq_meta = {
@@ -141,13 +181,14 @@ class Stage12StatsReports(BaseStage):
             "smoothing_alpha": self.stats_calc.smoothing_alpha,
             "total_train_tokens": total_train_tokens,
             "total_train_documents": len([d for d in tokenized_docs if d.split == "train"]),
-            "tokenizer_sha256": tok_sha256,
+            "tokenizer_sha256": current_tok_sha,
             "freeze_manifest_sha256": freeze_sha256,
             "global_unigram_file": "unigram_log_probs.npy",
             "global_unigram_shape": list(p_global_arr.shape),
             "global_unigram_npy_sha256": StageManifest.compute_file_hash(global_unigram_npy),
             "source_unigram_file": "source_unigram_log_probs.npz",
             "source_unigram_npz_sha256": StageManifest.compute_file_hash(source_unigram_npz),
+            "source_keys": source_keys_map,
             "source_train_tokens": dict(source_train_tokens)
         }
 

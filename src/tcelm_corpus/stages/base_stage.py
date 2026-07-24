@@ -20,7 +20,7 @@ STAGE_ORDER = [
 def resolve_code_identity(production_mode: bool = False) -> str:
     """
     Resolves exact code version fingerprint using environment variables, git commit SHA,
-    binary git diff checks, or source-tree file hashing.
+    binary git diff checks, untracked source files, or source-tree file hashing.
     """
     env_sha = os.environ.get("TCELM_GIT_SHA")
     if env_sha and env_sha.strip():
@@ -34,10 +34,30 @@ def resolve_code_identity(production_mode: bool = False) -> str:
         diff_bytes = subprocess.check_output(
             ["git", "diff", "HEAD", "--binary"], stderr=subprocess.DEVNULL
         )
-        if diff_bytes.strip():
-            diff_hash = hashlib.sha256(diff_bytes).hexdigest()[:8]
+        untracked_files = subprocess.check_output(
+            ["git", "ls-files", "--others", "--exclude-standard"], stderr=subprocess.DEVNULL
+        ).decode("utf-8").strip().splitlines()
+
+        if production_mode and any(f.startswith("src/") and f.endswith(".py") for f in untracked_files):
+            raise RuntimeError("Production Build Failure: Untracked python source files present in repository.")
+
+        hasher = hashlib.sha256(diff_bytes)
+        for uf in sorted(untracked_files):
+            if uf.endswith(".py"):
+                hasher.update(uf.encode("utf-8"))
+                try:
+                    with open(uf, "rb") as f:
+                        hasher.update(f.read())
+                except OSError:
+                    pass
+
+        is_dirty = bool(diff_bytes.strip() or untracked_files)
+        if is_dirty:
+            diff_hash = hasher.hexdigest()[:8]
             return f"{git_sha}-dirty-{diff_hash}"
         return git_sha
+    except RuntimeError:
+        raise
     except Exception:
         if production_mode:
             raise RuntimeError("Code identity resolution failed in production mode: Git is not available and TCELM_GIT_SHA is unset.")
@@ -47,6 +67,8 @@ def resolve_code_identity(production_mode: bool = False) -> str:
         py_files = sorted(glob.glob(os.path.join(source_dir, "**", "*.py"), recursive=True))
         hasher = hashlib.sha256()
         for pf in py_files:
+            rel_path = os.path.relpath(pf, source_dir)
+            hasher.update(rel_path.encode("utf-8"))
             try:
                 with open(pf, "rb") as f:
                     hasher.update(f.read())

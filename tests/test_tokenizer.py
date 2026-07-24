@@ -5,6 +5,7 @@ from src.tcelm_corpus.tokenizer import BPECorpusTokenizer
 from src.tcelm_corpus.schema import CanonicalDocument, QualityScores, SegmentPosition, StructureSpans
 from src.tcelm_corpus.stages.s09_tokenize_select import Stage09TokenizeSelect
 from src.tcelm_corpus.stages.s10_freeze import Stage10Freeze
+from src.tcelm_corpus.stages.s12_stats_reports import Stage12StatsReports
 from src.tcelm_corpus.config import CorpusPipelineConfig
 from src.tcelm_corpus.storage.parquet_io import ParquetShardIO
 from src.tcelm_corpus.storage.manifest import StageManifest
@@ -147,3 +148,54 @@ def test_stage10_requires_stage08_and_stage09_tokenizer_hash_match(tmp_path):
     freeze_stage = Stage10Freeze(output_dir, config)
     with pytest.raises(RuntimeError, match="Freeze Gate Failure: 3-way tokenizer SHA-256 mismatch"):
         freeze_stage.run_stage()
+
+def test_stage12_rejects_mismatched_tokenizer_hash_from_freeze_manifest(tmp_path):
+    output_dir = str(tmp_path)
+    config = CorpusPipelineConfig()
+
+    tok_dir = os.path.join(output_dir, "stages", "08_train_tokenizer")
+    os.makedirs(tok_dir, exist_ok=True)
+    tok_path = os.path.join(tok_dir, "tokenizer.json")
+    with open(tok_path, "w") as f:
+        f.write("tokenizer_v1")
+    actual_sha = StageManifest.compute_file_hash(tok_path)
+
+    StageManifest(tok_dir).save("08_train_tokenizer", "SUCCESS", output_hashes={"tokenizer_sha256": actual_sha})
+
+    freeze_dir = os.path.join(output_dir, "stages", "10_freeze")
+    os.makedirs(freeze_dir, exist_ok=True)
+    freeze_manifest = os.path.join(freeze_dir, "freeze_manifest.json")
+    with open(freeze_manifest, "w") as f:
+        json.dump({"tokenizer_sha256": "mismatched_freeze_tok_sha"}, f)
+
+    stage12 = Stage12StatsReports(output_dir, config)
+    with pytest.raises(RuntimeError, match="Frequency Metadata Failure: Tokenizer SHA-256 mismatch"):
+        stage12.run_stage()
+
+def test_stage12_additional_cache_inputs_invalidated_by_freeze_manifest_change(tmp_path):
+    output_dir = str(tmp_path)
+    config = CorpusPipelineConfig()
+
+    tok_dir = os.path.join(output_dir, "stages", "08_train_tokenizer")
+    os.makedirs(tok_dir, exist_ok=True)
+    tok_path = os.path.join(tok_dir, "tokenizer.json")
+    with open(tok_path, "w") as f:
+        f.write("tokenizer_v1")
+
+    freeze_dir = os.path.join(output_dir, "stages", "10_freeze")
+    os.makedirs(freeze_dir, exist_ok=True)
+    freeze_manifest = os.path.join(freeze_dir, "freeze_manifest.json")
+    with open(freeze_manifest, "w") as f:
+        json.dump({"version": 1}, f)
+
+    stage12 = Stage12StatsReports(output_dir, config)
+    key1 = stage12._compute_stage_cache_key()
+
+    # Modify freeze_manifest.json content
+    with open(freeze_manifest, "w") as f:
+        json.dump({"version": 2}, f)
+
+    key2 = stage12._compute_stage_cache_key()
+
+    # Stage 12 cache key MUST change due to freeze_manifest_sha256 in get_additional_cache_inputs()!
+    assert key1 != key2
