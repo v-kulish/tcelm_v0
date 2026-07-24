@@ -22,6 +22,14 @@ class Stage12StatsReports(BaseStage):
         self.report_gen = MandatoryReportGenerator(os.path.join(output_dir, "reports"))
 
     def run_stage(self) -> Dict[str, Any]:
+        s08_man_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "manifest.json")
+        if not os.path.exists(s08_man_path):
+            raise RuntimeError(f"Frequency Metadata Failure: Stage 08 manifest missing at `{s08_man_path}`.")
+
+        freeze_path = os.path.join(self.output_dir, "stages", "10_freeze", "freeze_manifest.json")
+        if not os.path.exists(freeze_path):
+            raise RuntimeError(f"Frequency Metadata Failure: Stage 10 freeze manifest missing at `{freeze_path}`.")
+
         all_a = list(self.layer_a_io.read_shards())
         all_b = list(self.layer_b_io.read_shards())
 
@@ -67,7 +75,6 @@ class Stage12StatsReports(BaseStage):
 
         tokenized_docs: List[TokenizedDocument] = []
         source_train_tokens = defaultdict(int)
-        total_train_tokens = 0
 
         for rec in all_b:
             doc_id = rec.get("document_id") or rec.get("doc_id")
@@ -84,9 +91,7 @@ class Stage12StatsReports(BaseStage):
             tokenized_docs.append(tdoc)
 
             if rec["split"] == "train":
-                tok_len = len(tok_ids)
-                source_train_tokens[rec["source"]] += tok_len
-                total_train_tokens += tok_len
+                source_train_tokens[rec["source"]] += len(tok_ids)
 
         # 1. Compute smoothed unigram log probabilities on TRAIN split only
         print("Computing unigram frequency log probabilities on TRAIN split...")
@@ -94,6 +99,16 @@ class Stage12StatsReports(BaseStage):
 
         p_global_arr = freq_stats["p_global_log"]
         p_source_dict = freq_stats["p_source_log"]
+        total_train_tokens = freq_stats["total_train_tokens"]
+
+        # Validate array shapes, float32 dtype, and finite values
+        expected_shape = (self.config.tokenizer.vocab_size,)
+        if p_global_arr.shape != expected_shape or p_global_arr.dtype != np.float32 or not np.all(np.isfinite(p_global_arr)):
+            raise RuntimeError(f"Frequency Validation Failure: Global array invalid (shape={p_global_arr.shape}, dtype={p_global_arr.dtype}).")
+
+        for src, s_arr in p_source_dict.items():
+            if s_arr.shape != expected_shape or s_arr.dtype != np.float32 or not np.all(np.isfinite(s_arr)):
+                raise RuntimeError(f"Frequency Validation Failure: Source array `{src}` invalid (shape={s_arr.shape}, dtype={s_arr.dtype}).")
 
         # PERSIST binary float32 numpy arrays (.npy & .npz) for fast training loaders
         global_unigram_npy = os.path.join(self.stage_dir, "unigram_log_probs.npy")
@@ -114,10 +129,8 @@ class Stage12StatsReports(BaseStage):
 
         # Read tokenizer and freeze manifest hashes for metadata companion
         tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
-        tok_sha256 = StageManifest.compute_file_hash(tok_path) if os.path.exists(tok_path) else "unknown"
-
-        freeze_path = os.path.join(self.output_dir, "stages", "10_freeze", "freeze_manifest.json")
-        freeze_sha256 = StageManifest.compute_file_hash(freeze_path) if os.path.exists(freeze_path) else "unknown"
+        tok_sha256 = StageManifest.compute_file_hash(tok_path)
+        freeze_sha256 = StageManifest.compute_file_hash(freeze_path)
 
         # Generate Frequency Companion Metadata Manifest
         freq_meta = {
@@ -125,7 +138,7 @@ class Stage12StatsReports(BaseStage):
             "corpus_version": self.config.corpus_version,
             "dtype": "float32",
             "vocab_size": self.config.tokenizer.vocab_size,
-            "smoothing_alpha": 0.1,
+            "smoothing_alpha": self.stats_calc.smoothing_alpha,
             "total_train_tokens": total_train_tokens,
             "total_train_documents": len([d for d in tokenized_docs if d.split == "train"]),
             "tokenizer_sha256": tok_sha256,

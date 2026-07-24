@@ -37,12 +37,25 @@ class Stage09TokenizeSelect(BaseStage):
         return {}
 
     def run_stage(self) -> Dict[str, Any]:
+        s08_man_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "manifest.json")
+        if not os.path.exists(s08_man_path):
+            raise RuntimeError(f"Tokenizer Provenance Failure: Stage 08 manifest missing at `{s08_man_path}`.")
+
+        with open(s08_man_path, "r", encoding="utf-8") as f:
+            s08_man = json.load(f)
+            s08_tok_sha = s08_man.get("output_hashes", {}).get("tokenizer_sha256")
+            if not s08_tok_sha:
+                raise RuntimeError("Tokenizer Provenance Failure: Stage 08 manifest missing `tokenizer_sha256`.")
+
         tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
-        if os.path.exists(tok_path):
-            self.tokenizer.load_tokenizer(tok_path)
-            tok_sha256 = StageManifest.compute_file_hash(tok_path)
-        else:
+        if not os.path.exists(tok_path):
             raise RuntimeError(f"Tokenizer file not found at `{tok_path}` in Stage 09 TokenizeSelect.")
+
+        tok_sha256 = StageManifest.compute_file_hash(tok_path)
+        if tok_sha256 != s08_tok_sha:
+            raise RuntimeError(f"Tokenizer Provenance Failure: Current tokenizer hash ({tok_sha256[:10]}...) does not match Stage 08 manifest ({s08_tok_sha[:10]}...).")
+
+        self.tokenizer.load_tokenizer(tok_path)
 
         all_input = list(self.input_io.read_shards())
         if not all_input:

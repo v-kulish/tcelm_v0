@@ -22,24 +22,41 @@ class Stage10Freeze(BaseStage):
         return {}
 
     def run_stage(self) -> Dict[str, Any]:
+        # 1. Require Stage 08 manifest and tokenizer SHA-256
+        s08_man_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "manifest.json")
+        if not os.path.exists(s08_man_path):
+            raise RuntimeError(f"Freeze Gate Failure: Stage 08 manifest missing at `{s08_man_path}`.")
+        with open(s08_man_path, "r", encoding="utf-8") as f:
+            s08_man = json.load(f)
+            s08_tok_sha = s08_man.get("output_hashes", {}).get("tokenizer_sha256")
+            if not s08_tok_sha:
+                raise RuntimeError("Freeze Gate Failure: Stage 08 manifest missing `tokenizer_sha256`.")
+
+        # 2. Require Stage 09 manifest and tokenizer SHA-256
+        s09_man_path = os.path.join(self.output_dir, "stages", "09_tokenize_select", "manifest.json")
+        if not os.path.exists(s09_man_path):
+            raise RuntimeError(f"Freeze Gate Failure: Stage 09 manifest missing at `{s09_man_path}`.")
+        with open(s09_man_path, "r", encoding="utf-8") as f:
+            s09_man = json.load(f)
+            s09_tok_sha = s09_man.get("output_hashes", {}).get("tokenizer_sha256")
+            if not s09_tok_sha:
+                raise RuntimeError("Freeze Gate Failure: Stage 09 manifest missing `tokenizer_sha256`.")
+
+        # 3. Require current tokenizer file to exist and match Stage 08 & Stage 09 SHA-256
         tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")
         if not os.path.exists(tok_path):
-            raise RuntimeError(f"Freeze Gate Failure: Tokenizer file missing at `{tok_path}` in Stage 10 Freeze.")
+            raise RuntimeError(f"Freeze Gate Failure: Tokenizer file missing at `{tok_path}`.")
+
+        current_tok_sha256 = StageManifest.compute_file_hash(tok_path)
+        if not (s08_tok_sha == s09_tok_sha == current_tok_sha256):
+            raise RuntimeError(
+                f"Freeze Gate Failure: 3-way tokenizer SHA-256 mismatch: "
+                f"Stage 08={s08_tok_sha[:10]}... vs Stage 09={s09_tok_sha[:10]}... vs Current={current_tok_sha256[:10]}..."
+            )
 
         self.tokenizer.load_tokenizer(tok_path)
         if self.tokenizer.tokenizer is None:
             raise RuntimeError(f"Freeze Gate Failure: Failed loading tokenizer instance from `{tok_path}`.")
-
-        current_tok_sha256 = StageManifest.compute_file_hash(tok_path)
-
-        # Check Stage 09 tokenizer SHA256 if recorded
-        s09_man_path = os.path.join(self.output_dir, "stages", "09_tokenize_select", "manifest.json")
-        if os.path.exists(s09_man_path):
-            with open(s09_man_path, "r", encoding="utf-8") as f:
-                s09_man = json.load(f)
-                s09_tok_sha = s09_man.get("output_hashes", {}).get("tokenizer_sha256")
-                if s09_tok_sha and s09_tok_sha != current_tok_sha256:
-                    raise RuntimeError(f"Freeze Gate Failure: Tokenizer SHA-256 mismatch (Stage 09: {s09_tok_sha[:10]}... vs Stage 10: {current_tok_sha256[:10]}...).")
 
         stage_09_dir = os.path.join(self.output_dir, "stages", "09_tokenize_select")
         layer_a_dir = os.path.join(stage_09_dir, "layer_a_selected")
@@ -78,11 +95,16 @@ class Stage10Freeze(BaseStage):
                     f"(Encoded Layer A length={len(encoded_ids_a)} vs Stored Layer B length={len(stored_ids_b)})."
                 )
 
+        s08_man_sha256 = StageManifest.compute_file_hash(s08_man_path)
+        s09_man_sha256 = StageManifest.compute_file_hash(s09_man_path)
+
         checksums = {
             "corpus_version": self.config.corpus_version,
-            "configuration_sha256": self._compute_stage_cache_key(),
+            "stage_cache_key": self._compute_stage_cache_key(),
             "code_commit": self.code_identity,
             "tokenizer_sha256": current_tok_sha256,
+            "stage_08_manifest_sha256": s08_man_sha256,
+            "stage_09_manifest_sha256": s09_man_sha256,
             "tokenizer_vocab_size": self.config.tokenizer.vocab_size,
             "verified_documents": len(docs_a),
             "verified_tokens": total_tokens,

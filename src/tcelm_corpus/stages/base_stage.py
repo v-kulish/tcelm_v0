@@ -17,10 +17,10 @@ STAGE_ORDER = [
     "09_tokenize_select", "10_freeze", "11_generate_views", "12_stats_reports"
 ]
 
-def resolve_code_identity() -> str:
+def resolve_code_identity(production_mode: bool = False) -> str:
     """
-    Resolves the exact code version fingerprint using environment variables, git commit SHA,
-    and dirty working tree diff checks.
+    Resolves exact code version fingerprint using environment variables, git commit SHA,
+    binary git diff checks, or source-tree file hashing.
     """
     env_sha = os.environ.get("TCELM_GIT_SHA")
     if env_sha and env_sha.strip():
@@ -31,16 +31,28 @@ def resolve_code_identity() -> str:
             ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
         ).decode("utf-8").strip()
 
-        is_dirty = bool(
-            subprocess.check_output(["git", "status", "--porcelain"], stderr=subprocess.DEVNULL).strip()
+        diff_bytes = subprocess.check_output(
+            ["git", "diff", "HEAD", "--binary"], stderr=subprocess.DEVNULL
         )
-        if is_dirty:
-            diff_text = subprocess.check_output(["git", "diff"], stderr=subprocess.DEVNULL)
-            diff_hash = hashlib.sha256(diff_text).hexdigest()[:8]
+        if diff_bytes.strip():
+            diff_hash = hashlib.sha256(diff_bytes).hexdigest()[:8]
             return f"{git_sha}-dirty-{diff_hash}"
         return git_sha
     except Exception:
-        return "debug-v0"
+        if production_mode:
+            raise RuntimeError("Code identity resolution failed in production mode: Git is not available and TCELM_GIT_SHA is unset.")
+
+        # Non-production fallback: compute SHA-256 fingerprint over python source files
+        source_dir = os.path.join(os.path.dirname(__file__), "..")
+        py_files = sorted(glob.glob(os.path.join(source_dir, "**", "*.py"), recursive=True))
+        hasher = hashlib.sha256()
+        for pf in py_files:
+            try:
+                with open(pf, "rb") as f:
+                    hasher.update(f.read())
+            except OSError:
+                pass
+        return f"src_fingerprint_{hasher.hexdigest()[:12]}"
 
 class BaseStage(ABC):
     """
@@ -52,7 +64,7 @@ class BaseStage(ABC):
         self.stage_name = stage_name
         self.config = config
         self.output_dir = output_dir
-        self.code_identity = code_identity or resolve_code_identity()
+        self.code_identity = code_identity or resolve_code_identity(production_mode=getattr(config, "production_mode", False))
         self.stage_dir = os.path.join(output_dir, "stages", stage_name)
         os.makedirs(self.stage_dir, exist_ok=True)
 

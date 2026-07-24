@@ -7,6 +7,7 @@ from src.tcelm_corpus.stages.s09_tokenize_select import Stage09TokenizeSelect
 from src.tcelm_corpus.stages.s10_freeze import Stage10Freeze
 from src.tcelm_corpus.config import CorpusPipelineConfig
 from src.tcelm_corpus.storage.parquet_io import ParquetShardIO
+from src.tcelm_corpus.storage.manifest import StageManifest
 
 def test_tokenizer_training_and_encoding(tmp_path):
     tokenizer = BPECorpusTokenizer(vocab_size=1000)
@@ -54,10 +55,15 @@ def test_freeze_gate_fails_on_same_length_token_mismatch(tmp_path):
     
     tokenizer = BPECorpusTokenizer(vocab_size=1000)
     tokenizer.train_from_texts(["The quick brown fox jumps over the lazy dog."], save_path=tok_path)
+    tok_sha = StageManifest.compute_file_hash(tok_path)
+
+    # Save matching Stage 08 and Stage 09 manifests
+    StageManifest(tok_dir).save("08_train_tokenizer", "SUCCESS", output_hashes={"tokenizer_sha256": tok_sha})
 
     stage_09_dir = os.path.join(output_dir, "stages", "09_tokenize_select")
     layer_a_dir = os.path.join(stage_09_dir, "layer_a_selected")
     layer_b_dir = os.path.join(stage_09_dir, "layer_b_selected")
+    StageManifest(stage_09_dir).save("09_tokenize_select", "SUCCESS", output_hashes={"tokenizer_sha256": tok_sha})
 
     rec_a = {"document_id": "doc1", "normalized_text": "The quick brown fox jumps over the lazy dog."}
     
@@ -102,3 +108,42 @@ def test_tokenizer_file_modification_invalidates_stage09_cache_inputs(tmp_path):
 
     # Cache key MUST change due to get_additional_cache_inputs() hook!
     assert key1 != key2
+
+def test_stage09_rejects_mismatched_tokenizer_hash_from_stage08(tmp_path):
+    output_dir = str(tmp_path)
+    config = CorpusPipelineConfig()
+
+    tok_dir = os.path.join(output_dir, "stages", "08_train_tokenizer")
+    os.makedirs(tok_dir, exist_ok=True)
+    tok_path = os.path.join(tok_dir, "tokenizer.json")
+    with open(tok_path, "w") as f:
+        f.write("current_tokenizer_content")
+
+    # Stage 08 manifest records a DIFFERENT hash
+    StageManifest(tok_dir).save("08_train_tokenizer", "SUCCESS", output_hashes={"tokenizer_sha256": "fake_hash_12345"})
+
+    stage09 = Stage09TokenizeSelect(output_dir, config)
+    with pytest.raises(RuntimeError, match="Tokenizer Provenance Failure: Current tokenizer hash"):
+        stage09.run_stage()
+
+def test_stage10_requires_stage08_and_stage09_tokenizer_hash_match(tmp_path):
+    output_dir = str(tmp_path)
+    config = CorpusPipelineConfig()
+
+    tok_dir = os.path.join(output_dir, "stages", "08_train_tokenizer")
+    os.makedirs(tok_dir, exist_ok=True)
+    tok_path = os.path.join(tok_dir, "tokenizer.json")
+    with open(tok_path, "w") as f:
+        f.write("valid_tokenizer")
+    actual_sha = StageManifest.compute_file_hash(tok_path)
+
+    # Stage 08 records actual_sha
+    StageManifest(tok_dir).save("08_train_tokenizer", "SUCCESS", output_hashes={"tokenizer_sha256": actual_sha})
+
+    # Stage 09 records a DIFFERENT sha
+    stage_09_dir = os.path.join(output_dir, "stages", "09_tokenize_select")
+    StageManifest(stage_09_dir).save("09_tokenize_select", "SUCCESS", output_hashes={"tokenizer_sha256": "mismatched_s09_sha"})
+
+    freeze_stage = Stage10Freeze(output_dir, config)
+    with pytest.raises(RuntimeError, match="Freeze Gate Failure: 3-way tokenizer SHA-256 mismatch"):
+        freeze_stage.run_stage()
