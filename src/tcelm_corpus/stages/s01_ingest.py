@@ -44,7 +44,8 @@ class Stage01Ingest(BaseStage):
             # Proportional smoke token budget calculation
             source_smoke_budget = None
             if smoke_total is not None:
-                source_smoke_budget = int(smoke_total * source_cfg.target_ratio * 1.35)
+                source_ratio = getattr(source_cfg, "share", getattr(source_cfg, "target_ratio", 0.0))
+                source_smoke_budget = int(smoke_total * source_ratio * 1.35)
 
             # Stream candidates
             for i, raw_item in enumerate(ds):

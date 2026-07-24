@@ -24,6 +24,10 @@ class SourceConfig:
     max_ufffd_ratio: Optional[float] = 0.001
     max_code_log_token_ratio: Optional[float] = None
 
+    @property
+    def target_ratio(self) -> float:
+        return self.share
+
 @dataclass
 class DedupConfig:
     num_bands: int = 16
@@ -62,6 +66,7 @@ class CorpusPipelineConfig:
     target_scale_tokens: int = 3000000000
     production_mode: bool = False
     max_records_per_source: Optional[int] = None
+    smoke_total_tokens: Optional[int] = None
     sources: List[SourceConfig] = field(default_factory=list)
     deduplication: DedupConfig = field(default_factory=DedupConfig)
     decontamination: DecontamConfig = field(default_factory=DecontamConfig)
