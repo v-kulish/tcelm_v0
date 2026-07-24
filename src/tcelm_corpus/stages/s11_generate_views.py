@@ -22,6 +22,8 @@ class Stage11GenerateViews(BaseStage):
             vocab_size=self.config.tokenizer.vocab_size,
             special_tokens=self.config.tokenizer.special_tokens
         )
+        self._cached_fs_snapshot = None
+        self._cached_layer_b_digest = None
 
     def _compute_current_layer_b_digest(self) -> str:
         layer_b_dir = os.path.join(self.output_dir, "stages", "09_tokenize_select", "layer_b_selected")
@@ -32,6 +34,16 @@ class Stage11GenerateViews(BaseStage):
         if not shard_files:
             raise RuntimeError(f"Freeze Verification Failure: 0 Layer B Parquet shards found in `{layer_b_dir}` in Stage 11 cache key calculation.")
         
+        fs_snapshot = []
+        for sf in shard_files:
+            sp = os.path.join(layer_b_dir, sf)
+            st = os.stat(sp)
+            fs_snapshot.append((sf, st.st_size, st.st_mtime_ns))
+
+        fs_snapshot_tuple = tuple(fs_snapshot)
+        if self._cached_fs_snapshot == fs_snapshot_tuple and self._cached_layer_b_digest is not None:
+            return self._cached_layer_b_digest
+
         items = []
         for sf in shard_files:
             sp = os.path.join(layer_b_dir, sf)
@@ -39,7 +51,10 @@ class Stage11GenerateViews(BaseStage):
             h = StageManifest.compute_file_hash(sp)
             items.append((sf, sz, h))
 
-        return hashlib.sha256(json.dumps(items, sort_keys=True).encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(json.dumps(items, sort_keys=True).encode("utf-8")).hexdigest()
+        self._cached_fs_snapshot = fs_snapshot_tuple
+        self._cached_layer_b_digest = digest
+        return digest
 
     def get_additional_cache_inputs(self) -> Dict[str, str]:
         tok_path = os.path.join(self.output_dir, "stages", "08_train_tokenizer", "tokenizer.json")

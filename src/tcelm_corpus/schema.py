@@ -50,7 +50,7 @@ class CanonicalDocument:
     dedup_cluster_id: str
     split_group_id: str = ""
     requested_source_revision: str = "main"
-    resolved_source_revision_sha: str = "main"
+    resolved_source_revision_sha: Optional[str] = "main"
 
     normalized_text: str = ""
     document_type: str = "article"

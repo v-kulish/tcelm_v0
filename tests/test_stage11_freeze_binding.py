@@ -58,3 +58,36 @@ def test_layer_b_shard_modification_invalidates_stage11_cache(tmp_path):
     # Clear internal cache if any and re-check cache inputs
     inputs2 = stage.get_additional_cache_inputs()
     assert inputs1["current_layer_b_artifact_digest"] != inputs2["current_layer_b_artifact_digest"], "Stage 11 cache inputs did not change after Layer B shard modification!"
+
+def test_same_instance_execute_invalidates_cache_on_layer_b_modification(tmp_path):
+    output_dir = str(tmp_path / "run")
+    layer_b_dir = os.path.join(output_dir, "stages", "09_tokenize_select", "layer_b_selected")
+    s08_dir = os.path.join(output_dir, "stages", "08_train_tokenizer")
+    s10_dir = os.path.join(output_dir, "stages", "10_freeze")
+    os.makedirs(layer_b_dir, exist_ok=True)
+    os.makedirs(s08_dir, exist_ok=True)
+    os.makedirs(s10_dir, exist_ok=True)
+
+    with open(os.path.join(s08_dir, "tokenizer.json"), "w") as f:
+        f.write('{"test": 1}')
+
+    shard_io = ParquetShardIO(layer_b_dir)
+    shard_io.write_records_to_shards([{"doc": 1}], shard_prefix="part")
+
+    with open(os.path.join(s10_dir, "freeze_manifest.json"), "w") as f:
+        json.dump({"tokenizer_sha256": "dummy"}, f)
+
+    config = CorpusPipelineConfig()
+    stage = Stage11GenerateViews(output_dir, config)
+
+    # First cache check
+    digest1 = stage.get_additional_cache_inputs()["current_layer_b_artifact_digest"]
+
+    # Modify Layer B shard on disk
+    shard_files = [os.path.join(layer_b_dir, f) for f in os.listdir(layer_b_dir) if f.endswith(".parquet")]
+    with open(shard_files[0], "ab") as f:
+        f.write(b"\nMODIFIED_CONTENT")
+
+    # Second cache check on SAME stage instance
+    digest2 = stage.get_additional_cache_inputs()["current_layer_b_artifact_digest"]
+    assert digest1 != digest2, "Same-instance cache check failed to detect Layer B modification!"
