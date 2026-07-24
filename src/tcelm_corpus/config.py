@@ -66,6 +66,8 @@ class CorpusPipelineConfig:
     target_scale_tokens: int = 3000000000
     production_mode: bool = False
     max_records_per_source: Optional[int] = None
+    max_records_scanned_per_source: Optional[int] = None
+    max_consecutive_oversized_skips_per_source: Optional[int] = None
     smoke_total_tokens: Optional[int] = None
     sources: List[SourceConfig] = field(default_factory=list)
     deduplication: DedupConfig = field(default_factory=DedupConfig)
@@ -106,6 +108,9 @@ class CorpusPipelineConfig:
             oversampling_multiplier=data.get("oversampling_multiplier", 1.35),
             target_scale_tokens=target_scale,
             production_mode=is_prod,
+            max_records_per_source=data.get("max_records_per_source"),
+            max_records_scanned_per_source=data.get("max_records_scanned_per_source"),
+            max_consecutive_oversized_skips_per_source=data.get("max_consecutive_oversized_skips_per_source"),
             sources=sources,
             deduplication=dedup,
             decontamination=decontam,

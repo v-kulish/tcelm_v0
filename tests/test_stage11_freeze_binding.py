@@ -4,6 +4,7 @@ import pytest
 from src.tcelm_corpus.stages.s11_generate_views import Stage11GenerateViews
 from src.tcelm_corpus.config import CorpusPipelineConfig
 from src.tcelm_corpus.storage.parquet_io import ParquetShardIO
+from src.tcelm_corpus.storage.manifest import StageManifest
 
 def test_stage11_requires_freeze_manifest(tmp_path):
     output_dir = str(tmp_path / "run")
@@ -68,14 +69,21 @@ def test_same_instance_execute_invalidates_cache_on_layer_b_modification(tmp_pat
     os.makedirs(s08_dir, exist_ok=True)
     os.makedirs(s10_dir, exist_ok=True)
 
-    with open(os.path.join(s08_dir, "tokenizer.json"), "w") as f:
+    tok_path = os.path.join(s08_dir, "tokenizer.json")
+    with open(tok_path, "w") as f:
         f.write('{"test": 1}')
 
     shard_io = ParquetShardIO(layer_b_dir)
-    shard_io.write_records_to_shards([{"doc": 1}], shard_prefix="part")
+    written_shards = shard_io.write_records_to_shards([{"doc": 1}], shard_prefix="part")
+    shard_file = written_shards[0]
+    shard_hash = StageManifest.compute_file_hash(shard_file)
 
+    tok_hash = StageManifest.compute_file_hash(tok_path)
     with open(os.path.join(s10_dir, "freeze_manifest.json"), "w") as f:
-        json.dump({"tokenizer_sha256": "dummy"}, f)
+        json.dump({
+            "tokenizer_sha256": tok_hash,
+            "layer_b_shards": {os.path.basename(shard_file): shard_hash}
+        }, f)
 
     config = CorpusPipelineConfig()
     stage = Stage11GenerateViews(output_dir, config)
@@ -84,10 +92,16 @@ def test_same_instance_execute_invalidates_cache_on_layer_b_modification(tmp_pat
     digest1 = stage.get_additional_cache_inputs()["current_layer_b_artifact_digest"]
 
     # Modify Layer B shard on disk
-    shard_files = [os.path.join(layer_b_dir, f) for f in os.listdir(layer_b_dir) if f.endswith(".parquet")]
-    with open(shard_files[0], "ab") as f:
+    with open(shard_file, "ab") as f:
         f.write(b"\nMODIFIED_CONTENT")
 
     # Second cache check on SAME stage instance
     digest2 = stage.get_additional_cache_inputs()["current_layer_b_artifact_digest"]
     assert digest1 != digest2, "Same-instance cache check failed to detect Layer B modification!"
+
+    # Assert stage completion is invalidated
+    assert stage.is_completed() is False
+
+    # Execute on same instance must attempt execution and fail freeze verification
+    with pytest.raises(RuntimeError, match="Layer B Shard Hash Violation"):
+        stage.execute(force=False)

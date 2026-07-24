@@ -80,6 +80,7 @@ class Stage01Ingest(BaseStage):
         token_counts = {}
         oversized_skipped_counts = {}
         records_scanned_counts = {}
+        stop_reasons = {}
         all_shards = []
 
         smoke_total = getattr(self.config, "smoke_total_tokens", None)
@@ -91,6 +92,9 @@ class Stage01Ingest(BaseStage):
             requested_revision = rev_data.get("requested_revision", "main")
             resolved_revision_sha = rev_data.get("resolved_sha")
             resolution_status = rev_data.get("status", "unresolved_fallback")
+
+            if getattr(self.config, "production_mode", False) and resolution_status == "unresolved_fallback":
+                raise RuntimeError(f"Production Build Failure: Unresolved commit SHA for source `{source_name}` (Requested: `{requested_revision}`).")
 
             load_revision = resolved_revision_sha if resolved_revision_sha is not None else requested_revision
             log_sha_str = resolved_revision_sha[:10] if (resolved_revision_sha and len(resolved_revision_sha) >= 10) else "None"
@@ -112,12 +116,17 @@ class Stage01Ingest(BaseStage):
             source_token_count = 0
             oversized_skipped_doc_count = 0
             scanned_record_count = 0
+            consecutive_oversized_skips = 0
             structural_probe_selected = False
+            source_stop_reason = "source_exhausted"
 
-            # Scan bound per source
+            # Emergency hard scan ceiling per source
             max_scanned_limit = getattr(self.config, "max_records_scanned_per_source", None) or getattr(source_cfg, "max_records_scanned", None)
-            if max_scanned_limit is None and smoke_total is not None:
-                max_scanned_limit = 100
+            
+            # Consecutive oversized skips bound
+            max_consecutive_oversized_skips = getattr(self.config, "max_consecutive_oversized_skips_per_source", None)
+            if max_consecutive_oversized_skips is None and smoke_total is not None:
+                max_consecutive_oversized_skips = 100
 
             # Proportional smoke token budget & strict admission limit calculation
             source_smoke_budget = None
@@ -129,12 +138,15 @@ class Stage01Ingest(BaseStage):
 
             # Stream candidates
             for i, raw_item in enumerate(ds):
+                # 1. Scanned counter increments immediately upon retrieving raw record
                 scanned_record_count += 1
+
                 raw_id = str(raw_item.get("id", raw_item.get("doc_id", f"{source_name}_{i}")))
                 raw_text, license_status, metadata = adapter.extract_record(raw_item)
                 
                 if not raw_text or not raw_text.strip():
                     if max_scanned_limit is not None and scanned_record_count >= max_scanned_limit:
+                        source_stop_reason = "max_records_scanned"
                         print(f"Source `{source_name}` reached maximum scanned record limit ({scanned_record_count:,}/{max_scanned_limit:,}).")
                         break
                     continue
@@ -152,7 +164,14 @@ class Stage01Ingest(BaseStage):
                         structural_probe_selected = True
                     else:
                         oversized_skipped_doc_count += 1
+                        consecutive_oversized_skips += 1
+                        if max_consecutive_oversized_skips is not None and consecutive_oversized_skips >= max_consecutive_oversized_skips:
+                            source_stop_reason = "consecutive_oversized_limit"
+                            print(f"Source `{source_name}` stopped after {consecutive_oversized_skips} consecutive oversized skips.")
+                            break
+
                         if max_scanned_limit is not None and scanned_record_count >= max_scanned_limit:
+                            source_stop_reason = "max_records_scanned"
                             print(f"Source `{source_name}` reached maximum scanned record limit ({scanned_record_count:,}/{max_scanned_limit:,}).")
                             break
                         continue
@@ -194,6 +213,7 @@ class Stage01Ingest(BaseStage):
                 if is_eligible_balanced:
                     source_doc_count += 1
                     source_token_count += prov_tokens
+                    consecutive_oversized_skips = 0  # Reset consecutive oversized skips counter on balanced acceptance
 
                 if len(records_batch) >= 5000:
                     shards = self.shard_io.write_records_to_shards(records_batch, shard_prefix="part")
@@ -201,13 +221,16 @@ class Stage01Ingest(BaseStage):
                     records_batch = []
 
                 if getattr(self.config, "max_records_per_source", None) and source_doc_count >= self.config.max_records_per_source:
+                    source_stop_reason = "max_records_per_source"
                     break
 
                 if source_smoke_budget is not None and source_token_count >= source_smoke_budget:
+                    source_stop_reason = "smoke_budget_reached"
                     print(f"Source `{source_name}` reached proportional smoke token budget ({source_token_count:,} >= {source_smoke_budget:,}).")
                     break
 
                 if max_scanned_limit is not None and scanned_record_count >= max_scanned_limit:
+                    source_stop_reason = "max_records_scanned"
                     print(f"Source `{source_name}` reached maximum scanned record limit ({scanned_record_count:,}/{max_scanned_limit:,}).")
                     break
 
@@ -222,13 +245,15 @@ class Stage01Ingest(BaseStage):
             token_counts[source_name] = source_token_count
             oversized_skipped_counts[source_name] = oversized_skipped_doc_count
             records_scanned_counts[source_name] = scanned_record_count
+            stop_reasons[source_name] = source_stop_reason
 
         return {
             "record_counts": record_counts,
             "token_counts": token_counts,
             "rejection_counts": {
                 "oversized_documents_skipped": oversized_skipped_counts,
-                "records_scanned": records_scanned_counts
+                "records_scanned": records_scanned_counts,
+                "stop_reasons": stop_reasons
             },
             "output_hashes": {
                 "shard_count": len(all_shards),

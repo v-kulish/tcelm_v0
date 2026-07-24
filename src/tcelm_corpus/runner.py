@@ -26,13 +26,19 @@ class CorpusPipelineRunner:
         output_dir: str,
         target_scale_tokens: Optional[int] = None,
         max_records_per_source: Optional[int] = None,
-        smoke_total_tokens: Optional[int] = None
+        smoke_total_tokens: Optional[int] = None,
+        max_records_scanned_per_source: Optional[int] = None,
+        max_consecutive_oversized_skips_per_source: Optional[int] = None
     ):
         self.config = CorpusPipelineConfig.load_from_json(config_path, target_scale_tokens)
         if max_records_per_source is not None:
             self.config.max_records_per_source = max_records_per_source
         if smoke_total_tokens is not None:
             self.config.smoke_total_tokens = smoke_total_tokens
+        if max_records_scanned_per_source is not None:
+            self.config.max_records_scanned_per_source = max_records_scanned_per_source
+        if max_consecutive_oversized_skips_per_source is not None:
+            self.config.max_consecutive_oversized_skips_per_source = max_consecutive_oversized_skips_per_source
 
         self.output_dir = output_dir
 

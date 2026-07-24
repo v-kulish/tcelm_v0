@@ -25,6 +25,8 @@ def main():
     parser.add_argument("--smoke-total-tokens", type=str, default=None, help="Optional total proportional smoke token budget (e.g. 5M, 10M)")
     parser.add_argument("--output-dir", type=str, default="output_corpus_run", help="Output directory for artifacts and reports")
     parser.add_argument("--max-records-per-source", type=int, default=None, help="Optional max records per source (for quick local debugging)")
+    parser.add_argument("--max-records-scanned-per-source", type=int, default=None, help="Optional hard ceiling on upstream records scanned per source")
+    parser.add_argument("--max-consecutive-oversized-skips", type=int, default=None, help="Optional limit on consecutive oversized skips before terminating source scan")
     parser.add_argument("--force-restart", action="store_true", help="Force re-execution of completed stages")
 
     args = parser.parse_args()
@@ -48,7 +50,9 @@ def main():
         output_dir=args.output_dir,
         target_scale_tokens=target_tokens,
         max_records_per_source=args.max_records_per_source,
-        smoke_total_tokens=smoke_tokens
+        smoke_total_tokens=smoke_tokens,
+        max_records_scanned_per_source=args.max_records_scanned_per_source,
+        max_consecutive_oversized_skips_per_source=args.max_consecutive_oversized_skips
     )
 
     summary = runner.run(force_restart=args.force_restart)
