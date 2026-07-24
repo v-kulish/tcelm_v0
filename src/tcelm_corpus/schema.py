@@ -49,6 +49,8 @@ class CanonicalDocument:
     normalized_text_hash: str
     dedup_cluster_id: str
     split_group_id: str = ""
+    requested_source_revision: str = "main"
+    resolved_source_revision_sha: str = "main"
 
     normalized_text: str = ""
     document_type: str = "article"
@@ -82,10 +84,14 @@ class TokenizedDocument:
 @dataclass
 class LayerCViewRecord:
     view_id: str
-    document_id: str
-    view_type: str
-    input_token_ids: List[int]
-    target_token_ids: List[int]
+    split: str
+    usage: str                  # "pretraining" or "evaluation"
+    view_type: str              # "causal", "prefix_suffix", "bridge"
+    source_document_ids: List[str] = field(default_factory=list)
+    source_parent_document_ids: List[str] = field(default_factory=list)
+    input_token_ids: List[int] = field(default_factory=list)
+    target_token_ids: List[int] = field(default_factory=list)
+    loss_mask: List[int] = field(default_factory=list)
     horizon: int = 1
     relation: str = "causal"
     sampling_seed: int = 42

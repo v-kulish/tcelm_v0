@@ -37,6 +37,7 @@ def test_full_pipeline_sharded_stages(tmp_path):
     recs_01 = list(io_01.read_shards())
     assert len(recs_01) > 0, "Stage 01 output 0 records"
     assert len(recs_01[0]["document_id"]) == 32, "Stage 01 document_id is not a namespaced 32-char hex string"
+    assert "raw_text_hash" in recs_01[0], "Stage 01 record missing raw_text_hash"
 
     # 3. Assert Stage 09 output layer_a_selected and layer_b_selected records > 0
     io_09_a = ParquetShardIO(os.path.join(stages_dir, "09_tokenize_select", "layer_a_selected"))
@@ -51,11 +52,13 @@ def test_full_pipeline_sharded_stages(tmp_path):
     ids_b = [r["document_id"] for r in recs_09_b]
     assert ids_a == ids_b, "Layer A and Layer B document IDs do not match 1-to-1"
 
-    # 5. Assert Stage 11 generated view recipes containing materialized token sequences
-    io_11 = ParquetShardIO(os.path.join(stages_dir, "11_generate_views"))
+    # 5. Assert Stage 11 generated split-partitioned view recipes containing materialized token sequences
+    io_11 = ParquetShardIO(os.path.join(stages_dir, "11_generate_views", "train"))
     recs_11 = list(io_11.read_shards())
-    assert len(recs_11) > 0, "Stage 11 generated 0 view recipes"
+    assert len(recs_11) > 0, "Stage 11 generated 0 view recipes in train split"
     assert "input_token_ids_json" in recs_11[0], "Layer C record missing input_token_ids_json"
+    assert recs_11[0]["split"] == "train", "Layer C record split mismatch"
+    assert "source_document_ids_json" in recs_11[0], "Layer C record missing source_document_ids_json"
     input_ids = json.loads(recs_11[0]["input_token_ids_json"])
     assert isinstance(input_ids, list) and len(input_ids) > 0, "Layer C input_token_ids_json is empty"
 

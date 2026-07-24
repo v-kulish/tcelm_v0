@@ -96,10 +96,12 @@ class Stage09TokenizeSelect(BaseStage):
                     document_id=doc_id,
                     parent_document_id=parent_id,
                     source=rec["source"],
-                    source_revision=rec.get("source_revision", "v0.1"),
+                    source_revision=rec.get("requested_source_revision", "main"),
+                    requested_source_revision=rec.get("requested_source_revision", "main"),
+                    resolved_source_revision_sha=rec.get("resolved_source_revision_sha", "main"),
                     source_record_id=rec.get("source_record_id", doc_id),
-                    source_url_or_provenance=rec.get("url", ""),
-                    license=rec.get("license", "open"),
+                    source_url_or_provenance=rec.get("source_url_or_provenance", rec.get("url", "")),
+                    license=rec.get("license", rec.get("license_status", "missing")),
                     authors=rec.get("authors", ""),
                     title=rec.get("title", ""),
                     publication_date=rec.get("publication_date", ""),
@@ -124,34 +126,56 @@ class Stage09TokenizeSelect(BaseStage):
                     if needed <= 0:
                         break
 
-                    cut_idx = tok_len
+                    # Collect candidate cuts in descending order
+                    candidate_cuts = []
                     if tdoc.paragraph_token_spans:
-                        for p_start, p_end in tdoc.paragraph_token_spans:
-                            if p_end <= needed:
-                                cut_idx = p_end
-                    if cut_idx == tok_len and tdoc.sentence_token_spans:
-                        for s_start, s_end in tdoc.sentence_token_spans:
-                            if s_end <= needed:
-                                cut_idx = s_end
-                    if cut_idx == tok_len:
-                        cut_idx = needed
+                        candidate_cuts.extend([p_end for p_start, p_end in tdoc.paragraph_token_spans if p_end <= needed])
+                    if tdoc.sentence_token_spans:
+                        candidate_cuts.extend([s_end for s_start, s_end in tdoc.sentence_token_spans if s_end <= needed])
+                    candidate_cuts.append(needed)
+                    candidate_cuts.sort(reverse=True)
 
-                    if cut_idx < 64 and accumulated_tokens > 0:
-                        # Omit segment if less than minimum length
-                        break
+                    accepted_fit = False
+                    for cut in candidate_cuts:
+                        truncated_text = self.tokenizer.tokenizer.decode(tdoc.token_ids[:cut])
+                        test_cdoc = CanonicalDocument(
+                            document_id=doc_id,
+                            parent_document_id=parent_id,
+                            source=rec["source"],
+                            source_revision=rec.get("requested_source_revision", "main"),
+                            requested_source_revision=rec.get("requested_source_revision", "main"),
+                            resolved_source_revision_sha=rec.get("resolved_source_revision_sha", "main"),
+                            source_record_id=rec.get("source_record_id", doc_id),
+                            source_url_or_provenance=rec.get("source_url_or_provenance", rec.get("url", "")),
+                            license=rec.get("license", rec.get("license_status", "missing")),
+                            authors=rec.get("authors", ""),
+                            title=rec.get("title", ""),
+                            publication_date=rec.get("publication_date", ""),
+                            language="en",
+                            raw_text_hash=rec.get("raw_text_hash", ""),
+                            normalized_text_hash=hashlib.sha256(truncated_text.encode("utf-8")).hexdigest(),
+                            dedup_cluster_id=rec.get("dedup_cluster_id", doc_id),
+                            normalized_text=truncated_text,
+                            domain=rec.get("domain", "general"),
+                            structure=self.segmenter.extract_structure_spans(truncated_text),
+                            split=rec.get("split", "train")
+                        )
+                        test_tdoc = self.tokenizer.encode_document(test_cdoc)
+                        test_len = len(test_tdoc.token_ids)
 
-                    # Decode cut tokens back to raw text, then re-encode text to ensure exact 1-to-1 token ID equivalence
-                    truncated_text = self.tokenizer.tokenizer.decode(tdoc.token_ids[:cut_idx])
-                    cdoc.normalized_text = truncated_text
-                    cdoc.normalized_text_hash = hashlib.sha256(truncated_text.encode("utf-8")).hexdigest()
-                    cdoc.structure = self.segmenter.extract_structure_spans(truncated_text)
-                    rec["normalized_text"] = truncated_text
-                    rec["normalized_text_hash"] = cdoc.normalized_text_hash
-                    rec["structure_json"] = json.dumps(cdoc.structure.__dict__)
+                        if 64 <= test_len <= needed or (needed < 64 and test_len <= needed):
+                            cdoc = test_cdoc
+                            rec["normalized_text"] = truncated_text
+                            rec["normalized_text_hash"] = test_cdoc.normalized_text_hash
+                            rec["structure_json"] = json.dumps(test_cdoc.structure.__dict__)
+                            tdoc = test_tdoc
+                            tok_len = test_len
+                            accepted_fit = True
+                            break
 
-                    # Re-encode canonical document so Layer B token IDs match Layer A text 1-to-1 under tokenizer.encode()
-                    tdoc = self.tokenizer.encode_document(cdoc)
-                    tok_len = len(tdoc.token_ids)
+                    if not accepted_fit:
+                        # Continue to next candidate document if no tail boundary fits
+                        continue
 
                 rec_b = {
                     "document_id": tdoc.document_id,

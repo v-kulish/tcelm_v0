@@ -37,7 +37,7 @@ class Stage04Segment(BaseStage):
             metadata = {
                 "title": rec.get("title", ""),
                 "url": rec.get("url", ""),
-                "license": rec.get("license_status", "missing"),
+                "license": rec.get("license", rec.get("license_status", "missing")),
                 "domain": rec.get("domain", "general")
             }
 
@@ -56,6 +56,14 @@ class Stage04Segment(BaseStage):
 
             for cdoc in cdocs:
                 cdoc.split_group_id = split_group_id
+                cdoc.source_record_id = rec.get("source_record_id", doc_id)
+                cdoc.source_revision = rec.get("requested_source_revision", "main")
+                cdoc.requested_source_revision = rec.get("requested_source_revision", "main")
+                cdoc.resolved_source_revision_sha = rec.get("resolved_source_revision_sha", "main")
+                cdoc.source_url_or_provenance = rec.get("source_url_or_provenance", rec.get("url", ""))
+                cdoc.license = rec.get("license", rec.get("license_status", "missing"))
+                cdoc.raw_text_hash = rec.get("raw_text_hash", "")
+
                 rec_dict = cdoc.to_dict()
                 
                 # Convert dataclass fields to JSON strings for Parquet compatibility
@@ -64,6 +72,7 @@ class Stage04Segment(BaseStage):
                 rec_dict["position_json"] = json.dumps(rec_dict["position"])
                 rec_dict["priority"] = rec["priority"]
                 rec_dict["split_group_id"] = split_group_id
+                rec_dict["license_status"] = cdoc.license
                 
                 # Remove nested dict fields before Parquet serialization
                 del rec_dict["structure"]

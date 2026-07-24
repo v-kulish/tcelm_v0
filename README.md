@@ -12,12 +12,25 @@ pip install -e .
 ```
 
 ### Running the Pipeline
-To run a small-scale real data verification with a record limit per source:
+
+#### Proportional Token-Budgeted Smoke Runs (Recommended for Smoke Testing)
+Run a balanced smoke test where ingestion pool token caps are calculated proportionally to the 18 target source ratios ($B_s = \text{smoke\_total\_tokens} \times r_s \times 1.35$):
+```bash
+# 5M Proportional Smoke Run
+python3 run_pipeline.py --scale 5M --smoke-total-tokens 5M --output-dir output_run_5m_balanced --force-restart
+
+# 50M Proportional Smoke Run
+python3 run_pipeline.py --scale 50M --smoke-total-tokens 50M --output-dir output_run_50m_balanced --force-restart
+```
+
+#### Quick Record-Capped Verification
+To run a fast micro-run with an explicit record limit per source:
 ```bash
 python3 run_pipeline.py --scale 50M --output-dir output_run_50m --max-records-per-source 20
 ```
 
-To run a full quota-driven pipeline (e.g. 50M, 1B, 3B, or 5B scale target):
+#### Full Quota-Driven Production Build
+To run a full scale production pipeline (e.g. 50M, 1B, 3B, or 5B scale target):
 ```bash
 python3 run_pipeline.py --config config/corpus_v0_3b.json --scale 3B --output-dir output_run_3b
 ```
@@ -26,7 +39,7 @@ python3 run_pipeline.py --config config/corpus_v0_3b.json --scale 3B --output-di
 
 ## 2. Configuration & Quotas
 
-The source quotas and pipeline parameters are specified in [`config/corpus_v0_3b.json`](--/config/corpus_v0_3b.json):
+The source quotas and pipeline parameters are specified in [`config/corpus_v0_3b.json`](config/corpus_v0_3b.json):
 
 - **18 Component Repositories**:
   - `common-pile/cccc_filtered` (30.00%)
@@ -48,7 +61,9 @@ The source quotas and pipeline parameters are specified in [`config/corpus_v0_3b
   - `common-pile/github_archive_filtered` (4.95%)
   - `common-pile/python_enhancement_proposals_filtered` (0.05%)
 
-- **Oversampling**: Deterministic BLAKE3 priority hashing $q(d) = \text{uint64}(\text{BLAKE3}(\text{corpus\_version}, \text{source}, \text{doc\_id}, \text{seed}))$, retaining 1.35x initial quota pool.
+- **Oversampling & Provenance**:
+  - Priority hashing: $q(d) = \text{uint64}(\text{BLAKE3}(\text{corpus\_version}, \text{source}, \text{doc\_id}, \text{seed}))$, retaining 1.35x initial quota pool.
+  - End-to-End Provenance: Preserves `source_repository`, `requested_source_revision`, `resolved_source_revision_sha`, `source_record_id`, `source_url_or_provenance`, `license`, `raw_text_hash`, and deterministic namespaced `document_id` across all 12 stages.
 
 ---
 
@@ -56,7 +71,10 @@ The source quotas and pipeline parameters are specified in [`config/corpus_v0_3b
 
 - **Layer A**: Canonical Parquet records with Unicode NFC, PII redaction (`<EMAIL>`, `<PHONE>`, `<IP>`, `<API_KEY>`, `<PRIVATE_KEY>`), structural spans (`sentence_spans`, `paragraph_spans`, `turn_spans`, `equation_spans`), quality scores, and segment adjacency tracking.
 - **Layer B**: Tokenized Parquet records with 32,768 byte-level BPE tokenizer and structural token offsets.
-- **Layer C**: Derived experiment views (Causal 4k sequence packing with `<EOS><DOC>` markers, Prefix-to-Suffix trajectory views, Bridge masked span views).
+- **Layer C**: Derived experiment views partitioned by split (`11_generate_views/train/`, `11_generate_views/validation/`, `11_generate_views/test/`, `11_generate_views/trajectory_holdout/`).
+  - Pre-generation split isolation guarantees zero evaluation data leakage into pretraining views.
+  - Causal 4k sequence packing with `<EOS><DOC>` markers (train split only), Prefix-to-Suffix trajectory views, and Bridge masked span views.
+  - Full list-based document lineage tracking (`source_document_ids`, `source_parent_document_ids`).
 
 ---
 

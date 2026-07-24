@@ -20,10 +20,20 @@ class CorpusPipelineRunner:
     """
     Disk-backed, sharded, 12-stage production orchestrator for TCELM-Corpus-v0.
     """
-    def __init__(self, config_path: str, output_dir: str, target_scale_tokens: Optional[int] = None, max_records_per_source: Optional[int] = None):
+    def __init__(
+        self,
+        config_path: str,
+        output_dir: str,
+        target_scale_tokens: Optional[int] = None,
+        max_records_per_source: Optional[int] = None,
+        smoke_total_tokens: Optional[int] = None
+    ):
         self.config = CorpusPipelineConfig.load_from_json(config_path, target_scale_tokens)
         if max_records_per_source is not None:
             self.config.max_records_per_source = max_records_per_source
+        if smoke_total_tokens is not None:
+            self.config.smoke_total_tokens = smoke_total_tokens
+
         self.output_dir = output_dir
 
         self.stages = [
@@ -42,12 +52,8 @@ class CorpusPipelineRunner:
         ]
 
     def run(self, force_restart: bool = False) -> Dict[str, Any]:
-        print(f"=== Starting TCELM Corpus Pipeline (Target Scale: {self.config.target_scale_tokens:,} tokens) ===")
-        
-        summary = {}
+        results = {}
         for stage in self.stages:
             stage_res = stage.execute(force=force_restart)
-            summary[stage.stage_name] = stage_res
-
-        print("=== TCELM Corpus Pipeline Completed Successfully ===")
-        return summary
+            results[stage.stage_name] = stage_res
+        return results
