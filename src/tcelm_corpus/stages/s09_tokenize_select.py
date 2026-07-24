@@ -140,23 +140,18 @@ class Stage09TokenizeSelect(BaseStage):
                         # Omit segment if less than minimum length
                         break
 
-                    tdoc.token_ids = tdoc.token_ids[:cut_idx]
-                    tok_len = cut_idx
-
-                    # Recompute / trim all spans
-                    tdoc.sentence_token_spans = trim_spans(tdoc.sentence_token_spans, cut_idx)
-                    tdoc.paragraph_token_spans = trim_spans(tdoc.paragraph_token_spans, cut_idx)
-                    tdoc.turn_token_spans = trim_spans(tdoc.turn_token_spans, cut_idx)
-                    tdoc.equation_token_spans = trim_spans(tdoc.equation_token_spans, cut_idx)
-
-                    # Truncate matching Layer A canonical text consistently
-                    truncated_text = self.tokenizer.tokenizer.decode(tdoc.token_ids)
+                    # Decode cut tokens back to raw text, then re-encode text to ensure exact 1-to-1 token ID equivalence
+                    truncated_text = self.tokenizer.tokenizer.decode(tdoc.token_ids[:cut_idx])
                     cdoc.normalized_text = truncated_text
                     cdoc.normalized_text_hash = hashlib.sha256(truncated_text.encode("utf-8")).hexdigest()
                     cdoc.structure = self.segmenter.extract_structure_spans(truncated_text)
                     rec["normalized_text"] = truncated_text
                     rec["normalized_text_hash"] = cdoc.normalized_text_hash
                     rec["structure_json"] = json.dumps(cdoc.structure.__dict__)
+
+                    # Re-encode canonical document so Layer B token IDs match Layer A text 1-to-1 under tokenizer.encode()
+                    tdoc = self.tokenizer.encode_document(cdoc)
+                    tok_len = len(tdoc.token_ids)
 
                 rec_b = {
                     "document_id": tdoc.document_id,
