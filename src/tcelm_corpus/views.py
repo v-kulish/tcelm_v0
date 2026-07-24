@@ -8,6 +8,58 @@ class DerivedViewGenerator:
         self.seed = seed
         self.rng = random.Random(seed)
 
+    def finalize_packed_sequence(
+        self,
+        real_sequence: List[int],
+        source_document_ids: List[str],
+        source_parent_document_ids: List[str],
+        split: str,
+        view_type: str,
+        view_counter: int,
+        eos_id: int = 1
+    ) -> LayerCViewRecord:
+        C = self.ctx_length
+        R = min(len(real_sequence), C + 1)
+
+        seq = list(real_sequence[:R])
+        padding_count = (C + 1) - R
+        seq.extend([eos_id] * padding_count)
+
+        input_ids = seq[:-1]
+        target_ids = seq[1:]
+
+        valid_target_count = max(0, R - 1)
+        valid_input_count = min(R, C)
+
+        loss_mask = [1] * valid_target_count + [0] * (C - valid_target_count)
+        attention_mask = [1] * valid_input_count + [0] * (C - valid_input_count)
+
+        usage_label = "pretraining" if split == "train" else "evaluation"
+
+        assert len(input_ids) == C
+        assert len(target_ids) == C
+        assert len(loss_mask) == C
+        assert len(attention_mask) == C
+        assert sum(loss_mask) == max(0, R - 1)
+        assert sum(attention_mask) == min(R, C)
+
+        return LayerCViewRecord(
+            view_id=f"{split}_{view_type}_{view_counter}",
+            split=split,
+            usage=usage_label,
+            view_type=view_type,
+            source_document_ids=list(source_document_ids),
+            source_parent_document_ids=list(source_parent_document_ids),
+            input_token_ids=input_ids,
+            target_token_ids=target_ids,
+            loss_mask=loss_mask,
+            attention_mask=attention_mask,
+            horizon=1,
+            relation="causal" if "single" in view_type else "causal_packed",
+            sampling_seed=self.seed,
+            metadata={"doc_count": len(source_document_ids)}
+        )
+
     def generate_causal_packing_views(
         self,
         tokenized_docs: List[TokenizedDocument],
@@ -22,11 +74,10 @@ class DerivedViewGenerator:
             return views
 
         view_counter = 0
-        current_seq: List[int] = [bos_id]
+        current_seq: List[int] = []
         doc_ids_in_seq: List[str] = []
         parent_ids_in_seq: List[str] = []
 
-        usage_label = "pretraining" if split == "train" else "evaluation"
         min_view_len = min(64, self.ctx_length)
 
         for doc in tokenized_docs:
@@ -34,67 +85,73 @@ class DerivedViewGenerator:
             if not tokens:
                 continue
 
-            # 80% contiguous document sampling logic or packed disabled mode
-            if len(tokens) >= self.ctx_length or not allow_packing:
-                # Pick starting offset: 60% paragraph boundary, 25% section, 15% random
-                r = self.rng.random()
-                if r < 0.60 and doc.paragraph_token_spans:
-                    start_idx = self.rng.choice(doc.paragraph_token_spans)[0]
+            # Documents at least context length (C-1) or packing disabled mode -> Single Document View
+            if len(tokens) >= (self.ctx_length - 1) or not allow_packing:
+                needed_len = self.ctx_length + 1
+                if len(tokens) >= needed_len:
+                    r = self.rng.random()
+                    if r < 0.60 and doc.paragraph_token_spans:
+                        start_idx = self.rng.choice(doc.paragraph_token_spans)[0]
+                    else:
+                        start_idx = self.rng.randint(0, max(0, len(tokens) - needed_len))
+                    sub_tokens = tokens[start_idx:start_idx + needed_len]
                 else:
-                    start_idx = self.rng.randint(0, max(0, len(tokens) - self.ctx_length))
+                    sub_tokens = tokens
 
-                sub_tokens = tokens[start_idx:start_idx + self.ctx_length]
                 if len(sub_tokens) >= min_view_len:
-                    v_record = LayerCViewRecord(
-                        view_id=f"{split}_causal_single_{view_counter}",
-                        split=split,
-                        usage=usage_label,
-                        view_type="causal_single_doc",
+                    v_record = self.finalize_packed_sequence(
+                        real_sequence=sub_tokens,
                         source_document_ids=[doc.document_id],
                         source_parent_document_ids=[doc.parent_document_id],
-                        input_token_ids=sub_tokens[:-1] if len(sub_tokens) > 1 else sub_tokens,
-                        target_token_ids=sub_tokens[1:] if len(sub_tokens) > 1 else sub_tokens,
-                        loss_mask=[1] * (len(sub_tokens) - 1 if len(sub_tokens) > 1 else len(sub_tokens)),
-                        horizon=1,
-                        relation="causal",
-                        sampling_seed=self.seed,
-                        metadata={"start_idx": start_idx, "doc_id": doc.document_id}
+                        split=split,
+                        view_type="causal_single_doc",
+                        view_counter=view_counter,
+                        eos_id=eos_id
                     )
                     views.append(v_record)
                     view_counter += 1
             else:
-                # 20% document packing logic (strictly within same split)
-                if len(current_seq) + len(tokens) + 2 <= self.ctx_length:
-                    current_seq.extend(tokens)
-                    current_seq.extend([eos_id, doc_id])
+                # Packing logic: <BOS> doc1 <EOS> <DOC> doc2 <EOS>
+                if not current_seq:
+                    candidate = [bos_id] + tokens + [eos_id]
+                else:
+                    candidate = current_seq + [doc_id] + tokens + [eos_id]
+
+                if len(candidate) <= self.ctx_length + 1:
+                    current_seq = candidate
                     doc_ids_in_seq.append(doc.document_id)
                     parent_ids_in_seq.append(doc.parent_document_id)
                 else:
-                    if len(current_seq) > 1:
-                        if len(current_seq) < self.ctx_length + 1:
-                            current_seq.extend([eos_id] * (self.ctx_length + 1 - len(current_seq)))
-                        sub_seq = current_seq[:self.ctx_length + 1]
-                        v_record = LayerCViewRecord(
-                            view_id=f"{split}_causal_packed_{view_counter}",
+                    if len(current_seq) >= 2 and doc_ids_in_seq:
+                        v_record = self.finalize_packed_sequence(
+                            real_sequence=current_seq,
+                            source_document_ids=doc_ids_in_seq,
+                            source_parent_document_ids=parent_ids_in_seq,
                             split=split,
-                            usage=usage_label,
                             view_type="causal_packed_doc",
-                            source_document_ids=list(doc_ids_in_seq),
-                            source_parent_document_ids=list(parent_ids_in_seq),
-                            input_token_ids=sub_seq[:-1],
-                            target_token_ids=sub_seq[1:],
-                            loss_mask=[1] * (len(sub_seq) - 1),
-                            horizon=1,
-                            relation="causal_packed",
-                            sampling_seed=self.seed,
-                            metadata={"doc_count": len(doc_ids_in_seq)}
+                            view_counter=view_counter,
+                            eos_id=eos_id
                         )
                         views.append(v_record)
                         view_counter += 1
 
-                    current_seq = [bos_id] + tokens + [eos_id, doc_id]
+                    current_seq = [bos_id] + tokens + [eos_id]
                     doc_ids_in_seq = [doc.document_id]
                     parent_ids_in_seq = [doc.parent_document_id]
+
+        # Final buffer flush
+        if len(current_seq) >= 2 and doc_ids_in_seq:
+            v_record = self.finalize_packed_sequence(
+                real_sequence=current_seq,
+                source_document_ids=doc_ids_in_seq,
+                source_parent_document_ids=parent_ids_in_seq,
+                split=split,
+                view_type="causal_packed_doc",
+                view_counter=view_counter,
+                eos_id=eos_id
+            )
+            views.append(v_record)
+            view_counter += 1
 
         return views
 
@@ -131,6 +188,7 @@ class DerivedViewGenerator:
                     input_token_ids=prefix,
                     target_token_ids=target,
                     loss_mask=[1] * len(target),
+                    attention_mask=[1] * len(prefix),
                     horizon=horizon,
                     relation="trajectory_continuation",
                     sampling_seed=self.seed,
@@ -176,6 +234,7 @@ class DerivedViewGenerator:
                 input_token_ids=input_seq,
                 target_token_ids=bridge_target,
                 loss_mask=[1] * len(bridge_target),
+                attention_mask=[1] * len(input_seq),
                 horizon=len(bridge_target),
                 relation="bridge_recovery",
                 sampling_seed=self.seed,

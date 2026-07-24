@@ -1,8 +1,10 @@
 import os
+import json
 import hashlib
 import struct
 from typing import Dict, Any, List
 from datasets import load_dataset
+from huggingface_hub import HfApi
 from .base_stage import BaseStage
 from ..adapters import get_source_adapter
 
@@ -14,38 +16,75 @@ def compute_priority(corpus_version: str, source: str, doc_id: str, seed: int = 
 class Stage01Ingest(BaseStage):
     def __init__(self, output_dir: str, config):
         super().__init__("01_ingest", output_dir, config)
+        self._resolved_shas_cache = None
+
+    def _resolve_source_shas(self) -> Dict[str, str]:
+        if self._resolved_shas_cache is not None:
+            return self._resolved_shas_cache
+
+        resolved_shas = {}
+        api = HfApi()
+        for source_cfg in self.config.sources:
+            source_name = source_cfg.name
+            requested_rev = getattr(source_cfg, "revision", "main") or "main"
+            try:
+                info = api.dataset_info(repo_id=source_name, revision=requested_rev)
+                sha = getattr(info, "sha", None)
+                if sha and len(sha) == 40:
+                    resolved_shas[source_name] = sha
+                else:
+                    resolved_shas[source_name] = requested_rev
+            except Exception as e:
+                if getattr(self.config, "production_mode", False):
+                    raise RuntimeError(f"Production Build Failure: Failed resolving commit SHA for source `{source_name}` (Revision `{requested_rev}`): {e}")
+                resolved_shas[source_name] = requested_rev
+
+        self._resolved_shas_cache = resolved_shas
+        return resolved_shas
+
+    def get_additional_cache_inputs(self) -> Dict[str, str]:
+        shas = self._resolve_source_shas()
+        digest = hashlib.sha256(json.dumps(shas, sort_keys=True).encode("utf-8")).hexdigest()
+        return {"resolved_sources_sha256": digest}
 
     def run_stage(self) -> Dict[str, Any]:
         record_counts = {}
         token_counts = {}
+        oversized_skipped_counts = {}
         all_shards = []
 
         smoke_total = getattr(self.config, "smoke_total_tokens", None)
+        resolved_shas = self._resolve_source_shas()
 
         for source_cfg in self.config.sources:
             source_name = source_cfg.name
             requested_revision = getattr(source_cfg, "revision", "main") or "main"
-            print(f"Ingesting `{source_name}` (Revision: `{requested_revision}`)...")
+            resolved_revision_sha = resolved_shas.get(source_name, requested_revision)
+
+            print(f"Ingesting `{source_name}` (Requested: `{requested_revision}`, Resolved SHA: `{resolved_revision_sha[:10] if len(resolved_revision_sha)>=10 else resolved_revision_sha}`)...")
 
             adapter = get_source_adapter(source_name, source_cfg.__dict__)
             
             try:
-                ds = load_dataset(source_name, split="train", streaming=True, revision=requested_revision)
+                ds = load_dataset(source_name, split="train", streaming=True, revision=resolved_revision_sha)
             except Exception as e:
                 if getattr(self.config, "production_mode", False):
-                    raise RuntimeError(f"Production Build Failure: Failed streaming source `{source_name}` (Revision: `{requested_revision}`): {e}")
-                print(f"Warning: Failed streaming `{source_name}` with revision `{requested_revision}`: {e}")
+                    raise RuntimeError(f"Production Build Failure: Failed streaming source `{source_name}` (Revision: `{resolved_revision_sha}`): {e}")
+                print(f"Warning: Failed streaming `{source_name}` with revision `{resolved_revision_sha}`: {e}")
                 continue
 
             records_batch = []
             source_doc_count = 0
             source_token_count = 0
+            oversized_skipped_doc_count = 0
 
-            # Proportional smoke token budget calculation
+            # Proportional smoke token budget & admission limit calculation
             source_smoke_budget = None
+            max_single_doc_prov_tokens = None
             if smoke_total is not None:
                 source_ratio = getattr(source_cfg, "share", getattr(source_cfg, "target_ratio", 0.0))
                 source_smoke_budget = int(smoke_total * source_ratio * 1.35)
+                max_single_doc_prov_tokens = min(source_smoke_budget, max(2048, int(source_smoke_budget * 0.5)))
 
             # Stream candidates
             for i, raw_item in enumerate(ds):
@@ -55,13 +94,19 @@ class Stage01Ingest(BaseStage):
                 if not raw_text or not raw_text.strip():
                     continue
 
+                prov_tokens = len(raw_text.split())
+
+                # Non-destructive smoke admission check: skip oversized single documents
+                if max_single_doc_prov_tokens is not None and prov_tokens > max_single_doc_prov_tokens:
+                    if source_doc_count > 0:
+                        oversized_skipped_doc_count += 1
+                        continue
+
                 raw_text_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
-                resolved_revision_sha = requested_revision # Updated if SHA resolved
-                document_id = hashlib.sha256(f"{source_name}:{requested_revision}:{raw_id}:{raw_text_hash}".encode("utf-8")).hexdigest()[:32]
+                document_id = hashlib.sha256(f"{source_name}:{resolved_revision_sha}:{raw_id}:{raw_text_hash}".encode("utf-8")).hexdigest()[:32]
                 parent_document_id = document_id
 
                 priority = compute_priority(self.config.corpus_version, source_name, raw_id, self.config.seed)
-                prov_tokens = len(raw_text.split())
 
                 rec = {
                     "document_id": document_id,
@@ -108,9 +153,14 @@ class Stage01Ingest(BaseStage):
 
             record_counts[source_name] = source_doc_count
             token_counts[source_name] = source_token_count
+            oversized_skipped_counts[source_name] = oversized_skipped_doc_count
 
         return {
             "record_counts": record_counts,
             "token_counts": token_counts,
-            "output_hashes": {"shard_count": len(all_shards)}
+            "rejection_counts": {"oversized_documents_skipped": oversized_skipped_counts},
+            "output_hashes": {
+                "shard_count": len(all_shards),
+                "resolved_source_revisions": resolved_shas
+            }
         }

@@ -92,6 +92,7 @@ class LayerCViewRecord:
     input_token_ids: List[int] = field(default_factory=list)
     target_token_ids: List[int] = field(default_factory=list)
     loss_mask: List[int] = field(default_factory=list)
+    attention_mask: List[int] = field(default_factory=list)
     horizon: int = 1
     relation: str = "causal"
     sampling_seed: int = 42
