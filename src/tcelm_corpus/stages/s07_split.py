@@ -1,5 +1,6 @@
 import hashlib
 from typing import Dict, Any
+from tqdm import tqdm
 from .base_stage import BaseStage
 from ..storage.parquet_io import ParquetShardIO
 
@@ -22,7 +23,8 @@ class Stage07Split(BaseStage):
         test_share = getattr(self.config.splits, "test", 0.0010)
         holdout_share = getattr(self.config.splits, "trajectory_holdout", 0.0010)
 
-        for rec in all_input:
+        print(f"Stage 07 Split Assignment: Assigning splits across {len(all_input):,} decontaminated documents...")
+        for rec in tqdm(all_input, desc="Assigning Splits", unit="doc"):
             doc_id = rec.get("document_id") or rec.get("doc_id")
             # Must hash split_group_id to guarantee zero parent-family split leakage across segments
             split_group_id = rec.get("split_group_id") or rec.get("parent_document_id") or rec.get("dedup_cluster_id") or doc_id
@@ -51,6 +53,8 @@ class Stage07Split(BaseStage):
             split_counts[split] = split_counts.get(split, 0) + toks
 
         written_shards = self.shard_io.write_records_to_shards(split_records, shard_prefix="part")
+
+        print(f"Stage 07 Split Assignment complete: Assigned {len(split_records):,} documents to splits: {split_counts}.")
 
         return {
             "record_counts": record_counts,

@@ -2,6 +2,7 @@ import re
 import json
 from typing import Dict, Any, List, Set, Tuple
 from collections import defaultdict
+from tqdm import tqdm
 from .base_stage import BaseStage
 from ..storage.parquet_io import ParquetShardIO
 
@@ -41,7 +42,8 @@ class Stage06Decontaminate(BaseStage):
 
         shingle_size = getattr(self.config.decontamination, "shingle_size", 13)
 
-        for rec in all_input:
+        print(f"Stage 06 Decontamination: Scanning {len(all_input):,} documents against evaluation benchmark registry...")
+        for rec in tqdm(all_input, desc="Decontaminating Documents", unit="doc"):
             doc_id = rec.get("document_id") or rec.get("doc_id")
             parent_id = rec.get("parent_document_id") or doc_id
 
@@ -98,6 +100,8 @@ class Stage06Decontaminate(BaseStage):
             src = rec["source"]
             record_counts[src] = record_counts.get(src, 0) + 1
             token_counts[src] = token_counts.get(src, 0) + len(rec["normalized_text"].split())
+
+        print(f"Stage 06 Decontamination complete: Retained {len(clean_records):,} / {len(all_input):,} documents ({len(contamination_logs):,} contaminated items removed).")
 
         return {
             "record_counts": record_counts,

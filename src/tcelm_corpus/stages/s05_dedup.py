@@ -1,8 +1,10 @@
 import json
 import hashlib
 import re
+import numpy as np
 from typing import Dict, Any, List, Set, Tuple
 from collections import defaultdict
+from tqdm import tqdm
 from .base_stage import BaseStage
 from ..storage.parquet_io import ParquetShardIO
 from ..schema import CanonicalDocument, StructureSpans, QualityScores, SegmentPosition
@@ -54,16 +56,21 @@ def get_20grams(text: str) -> Set[str]:
         return set()
     return {' '.join(words[i:i+20]) for i in range(len(words) - 19)}
 
+_MINHASH_PRIME = 4294967311 # Prime > 2^32
+_RNG = np.random.RandomState(42)
+_MINHASH_A = _RNG.randint(1, 4294967295, size=128, dtype=np.uint64)
+_MINHASH_B = _RNG.randint(0, 4294967295, size=128, dtype=np.uint64)
+
 def compute_minhash(ngrams: Set[str], num_perm: int = 128) -> List[int]:
-    sig = []
-    for i in range(num_perm):
-        min_val = 0xFFFFFFFF_FFFFFFFF
-        for ng in ngrams:
-            h = int(hashlib.md5(f"{i}:{ng}".encode('utf-8')).hexdigest()[:16], 16)
-            if h < min_val:
-                min_val = h
-        sig.append(min_val)
-    return sig
+    if not ngrams:
+        return [0] * num_perm
+    # Fast vectorized linear MinHash: compute single 32-bit hash per n-gram, then numpy matrix mod
+    hashes = np.array([int(hashlib.md5(ng.encode('utf-8')).hexdigest()[:8], 16) for ng in ngrams], dtype=np.uint64)
+    a = _MINHASH_A[:num_perm, None]
+    b = _MINHASH_B[:num_perm, None]
+    perm_hashes = (a * hashes[None, :] + b) % _MINHASH_PRIME
+    min_values = np.min(perm_hashes, axis=1)
+    return min_values.tolist()
 
 def jaccard_sim(set_a: Set[str], set_b: Set[str]) -> float:
     if not set_a or not set_b:
@@ -91,8 +98,9 @@ class Stage05Dedup(BaseStage):
         parent_uf = UnionFind(all_split_groups)
 
         # 1. Exact Document Deduplication
+        print(f"Stage 05 Deduplication: Exact hashing across {len(all_recs):,} documents...")
         exact_map = defaultdict(list)
-        for rec in all_recs:
+        for rec in tqdm(all_recs, desc="Exact Hash Deduplication", unit="doc"):
             h = rec.get("normalized_text_hash") or hashlib.sha256(rec["normalized_text"].encode('utf-8')).hexdigest()
             rec["normalized_text_hash"] = h
             exact_map[h].append(rec)
@@ -110,9 +118,12 @@ class Stage05Dedup(BaseStage):
                 for r in recs:
                     parent_uf.union(winner["split_group_id"], r["split_group_id"])
 
+        print(f"Exact Deduplication complete: Retained {len(exact_deduped):,} / {len(all_recs):,} documents ({exact_removed_count:,} duplicates removed).")
+
         # 2. Exact Paragraph Deduplication & Span Recomputation
+        print("Stage 05 Deduplication: Frequency scanning paragraphs...")
         para_counts = defaultdict(int)
-        for rec in exact_deduped:
+        for rec in tqdm(exact_deduped, desc="Scanning Paragraphs", unit="doc"):
             paras = [p.strip() for p in rec["normalized_text"].split('\n\n') if len(p.strip().split()) >= 50]
             for p in set(paras):
                 p_hash = hashlib.md5(p.encode('utf-8')).hexdigest()
@@ -121,7 +132,7 @@ class Stage05Dedup(BaseStage):
         frequent_paras = {p_hash for p_hash, count in para_counts.items() if count >= 10}
 
         para_deduped = []
-        for rec in exact_deduped:
+        for rec in tqdm(exact_deduped, desc="Stripping Frequent Paragraphs", unit="doc"):
             paras = rec["normalized_text"].split('\n\n')
             filtered = []
             for p in paras:
@@ -151,7 +162,8 @@ class Stage05Dedup(BaseStage):
         doc_ids = [rec["document_id"] for rec in para_deduped]
         doc_dict = {rec["document_id"]: rec for rec in para_deduped}
 
-        for rec in para_deduped:
+        print(f"Stage 05 Deduplication: Vectorized MinHash indexing across {len(para_deduped):,} documents...")
+        for rec in tqdm(para_deduped, desc="MinHash & LSH Bucket Indexing", unit="doc"):
             d_id = rec["document_id"]
             ngrams = get_20grams(rec["normalized_text"])
             doc_ngrams[d_id] = ngrams
@@ -172,8 +184,9 @@ class Stage05Dedup(BaseStage):
                     for j in range(i + 1, len(b_doc_ids)):
                         candidate_pairs.add(tuple(sorted([b_doc_ids[i], b_doc_ids[j]])))
 
+        print(f"Stage 05 Deduplication: Verifying Jaccard similarity for {len(candidate_pairs):,} candidate pairs...")
         segment_uf = UnionFind(doc_ids)
-        for id1, id2 in sorted(candidate_pairs):
+        for id1, id2 in tqdm(sorted(candidate_pairs), desc="Verifying Candidate Pairs", unit="pair"):
             sim = jaccard_sim(doc_ngrams[id1], doc_ngrams[id2])
             if sim >= final_jaccard:
                 segment_uf.union(id1, id2)
@@ -223,6 +236,8 @@ class Stage05Dedup(BaseStage):
             "fuzzy_duplicate_clusters": fuzzy_clusters,
             "fuzzy_duplicates_removed": rejected_count
         }
+
+        print(f"Stage 05 Deduplication complete: Retained {len(final_retained):,} documents ({rejected_count:,} fuzzy duplicates removed).")
 
         return {
             "record_counts": record_counts,

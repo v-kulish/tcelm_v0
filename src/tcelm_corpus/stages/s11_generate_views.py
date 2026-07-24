@@ -1,6 +1,7 @@
 import os
 import json
 from typing import Dict, Any, List
+from tqdm import tqdm
 from .base_stage import BaseStage
 from ..storage.parquet_io import ParquetShardIO
 from ..views import DerivedViewGenerator
@@ -19,7 +20,7 @@ class Stage11GenerateViews(BaseStage):
             raise RuntimeError("Stage '11_generate_views' received 0 input records from Stage 09 Layer B.")
 
         tokenized_docs = []
-        for rec in all_input:
+        for rec in tqdm(all_input, desc="Loading Tokenized Records for Views", unit="doc"):
             doc_id = rec.get("document_id") or rec.get("doc_id")
             parent_id = rec.get("parent_document_id") or doc_id
 
@@ -52,7 +53,8 @@ class Stage11GenerateViews(BaseStage):
         bridge_views = self.view_generator.generate_bridge_views(tokenized_docs)
 
         view_records = []
-        for v in causal_views + prefix_suffix_views + bridge_views:
+        all_views = causal_views + prefix_suffix_views + bridge_views
+        for v in tqdm(all_views, desc="Serializing View Recipes", unit="recipe"):
             rec = {
                 "view_id": v.view_id,
                 "document_id": v.document_id,
@@ -70,6 +72,8 @@ class Stage11GenerateViews(BaseStage):
             view_records.append(rec)
 
         written_shards = self.shard_io.write_records_to_shards(view_records, shard_prefix="part")
+
+        print(f"Stage 11 View Generation complete: Generated {len(view_records):,} view recipes ({len(causal_views):,} causal, {len(prefix_suffix_views):,} prefix-suffix, {len(bridge_views):,} bridge).")
 
         return {
             "record_counts": {

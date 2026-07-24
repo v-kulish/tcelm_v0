@@ -3,6 +3,7 @@ import json
 import hashlib
 from typing import Dict, Any, List
 from collections import defaultdict
+from tqdm import tqdm
 from .base_stage import BaseStage
 from ..storage.parquet_io import ParquetShardIO
 from ..storage.manifest import StageManifest
@@ -72,7 +73,8 @@ class Stage09TokenizeSelect(BaseStage):
         record_counts = {}
         token_counts = {}
 
-        for source_cfg in self.config.sources:
+        print(f"Stage 09 Tokenization & Quota Selection: Tokenizing records across {len(self.config.sources)} sources...")
+        for source_cfg in tqdm(self.config.sources, desc="Tokenizing Sources", unit="source"):
             source_name = source_cfg.name
             target_quota = self.config.get_source_quota(source_name)
 
@@ -185,10 +187,11 @@ class Stage09TokenizeSelect(BaseStage):
 
             record_counts[source_name] = accumulated_docs
             token_counts[source_name] = accumulated_tokens
-            print(f"Source `{source_name}` final post-tokenization quota: {accumulated_docs:,} docs, {accumulated_tokens:,} tokens (Target: {target_quota:,}).")
 
         shards_a = self.layer_a_out_io.write_records_to_shards(canonical_selected_records, shard_prefix="part")
         shards_b = self.layer_b_out_io.write_records_to_shards(tokenized_selected_records, shard_prefix="part")
+
+        print(f"Stage 09 Tokenization & Quota Selection complete: Selected {len(canonical_selected_records):,} documents.")
 
         return {
             "record_counts": record_counts,

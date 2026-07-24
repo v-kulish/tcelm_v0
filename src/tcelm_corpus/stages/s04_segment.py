@@ -1,5 +1,6 @@
 import json
 from typing import Dict, Any
+from tqdm import tqdm
 from .base_stage import BaseStage
 from ..storage.parquet_io import ParquetShardIO
 from ..segmentation import StructuralSegmenter
@@ -20,7 +21,8 @@ class Stage04Segment(BaseStage):
         if not all_input:
             raise RuntimeError("Stage '04_segment' received 0 input records from Stage 03.")
 
-        for rec in all_input:
+        print(f"Stage 04 Structural Segmentation: Segmenting {len(all_input):,} cleaned documents...")
+        for rec in tqdm(all_input, desc="Segmenting Documents", unit="doc"):
             quality = QualityScores(
                 language_probability=1.0,
                 printable_character_ratio=rec.get("printable_ratio", 1.0),
@@ -75,6 +77,8 @@ class Stage04Segment(BaseStage):
                 token_counts[src] = token_counts.get(src, 0) + len(cdoc.normalized_text.split())
 
         written_shards = self.shard_io.write_records_to_shards(segmented_records, shard_prefix="part")
+
+        print(f"Stage 04 Structural Segmentation complete: Produced {len(segmented_records):,} segments from {len(all_input):,} parent documents.")
 
         return {
             "record_counts": record_counts,

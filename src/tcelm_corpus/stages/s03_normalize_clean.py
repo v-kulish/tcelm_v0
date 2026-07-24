@@ -1,4 +1,5 @@
 from typing import Dict, Any
+from tqdm import tqdm
 from .base_stage import BaseStage
 from ..storage.parquet_io import ParquetShardIO
 from ..normalize import TextNormalizer
@@ -34,7 +35,8 @@ class Stage03NormalizeClean(BaseStage):
         if not all_input:
             raise RuntimeError("Stage '03_normalize_clean' received 0 input records from Stage 02.")
 
-        for rec in all_input:
+        print(f"Stage 03 Normalize & Clean: Processing {len(all_input):,} raw documents...")
+        for rec in tqdm(all_input, desc="Normalizing & Cleaning", unit="doc"):
             source_name = rec["source"]
             source_name_lower = source_name.lower()
             source_cfg = source_cfg_map.get(source_name)
@@ -123,6 +125,8 @@ class Stage03NormalizeClean(BaseStage):
             token_counts[source_name] = token_counts.get(source_name, 0) + rec_out["approx_tokens"]
 
         written_shards = self.shard_io.write_records_to_shards(cleaned_records, shard_prefix="part")
+
+        print(f"Stage 03 Normalize & Clean complete: Retained {len(cleaned_records):,} / {len(all_input):,} documents.")
 
         return {
             "record_counts": record_counts,
